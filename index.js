@@ -1,9 +1,7 @@
-/**
- * @name react-native-fetch-blob
- * @author wkh237
- * @version 0.7.0
- * @flow
- */
+// Copyright 2016 wkh237@github. All rights reserved.
+// Use of this source code is governed by a MIT-style license that can be
+// found in the LICENSE file.
+// @flow
 
 import {
   NativeModules,
@@ -15,10 +13,13 @@ import {
 import type {
   RNFetchBlobNative,
   RNFetchBlobConfig,
-  RNFetchBlobStream
+  RNFetchBlobStream,
+  RNFetchBlobResponseInfo
 } from './types'
 import fs from './fs'
+import getUUID from './utils/uuid'
 import base64 from 'base-64'
+import polyfill from './polyfill'
 const {
   RNFetchBlobSession,
   readStream,
@@ -35,6 +36,7 @@ const {
   cp
 } = fs
 
+const Blob = polyfill.Blob
 const emitter = DeviceEventEmitter
 const RNFetchBlob:RNFetchBlobNative = NativeModules.RNFetchBlob
 
@@ -109,42 +111,62 @@ function fetch(...args:any):Promise {
   // create task ID for receiving progress event
   let taskId = getUUID()
   let options = this || {}
+  let subscription, subscriptionUpload, stateEvent
 
   let promise = new Promise((resolve, reject) => {
     let [method, url, headers, body] = [...args]
     let nativeMethodName = Array.isArray(body) ? 'fetchBlobForm' : 'fetchBlob'
 
     // on progress event listener
-    let subscription = emitter.addListener('RNFetchBlobProgress', (e) => {
+    subscription = emitter.addListener('RNFetchBlobProgress', (e) => {
       if(e.taskId === taskId && promise.onProgress) {
         promise.onProgress(e.written, e.total)
       }
     })
 
-    let subscriptionUpload = emitter.addListener('RNFetchBlobProgress-upload', (e) => {
+    subscriptionUpload = emitter.addListener('RNFetchBlobProgress-upload', (e) => {
       if(e.taskId === taskId && promise.onUploadProgress) {
         promise.onUploadProgress(e.written, e.total)
       }
     })
 
+    stateEvent = emitter.addListener('RNFetchBlobState', (e) => {
+      if(e.taskId === taskId && promise.onStateChange) {
+        promise.onStateChange(e)
+      }
+    })
+
+    // When the request body comes from Blob polyfill, we should use special its ref
+    // as the request body
+    if( body instanceof Blob && body.isRNFetchBlobPolyfill) {
+      body = body.getRNFetchBlobRef()
+    }
+
     let req = RNFetchBlob[nativeMethodName]
-    req(options, taskId, method, url, headers || {}, body, (err, data) => {
+
+    req(options, taskId, method, url, headers || {}, body, (err, info, data) => {
 
       // task done, remove event listener
       subscription.remove()
       subscriptionUpload.remove()
+      stateEvent.remove()
+      info = info ? info : {}
       if(err)
-        reject(new Error(err, data))
+        reject(new Error(err, info))
       else {
-        let respType = 'base64'
+        let rnfbEncode = 'base64'
         // response data is saved to storage
-        if(options.path || options.fileCache || options.addAndroidDownloads || options.key) {
-          respType = 'path'
+        if(options.path || options.fileCache || options.addAndroidDownloads
+          || options.key || options.auto && info.respType === 'blob') {
+          rnfbEncode = 'path'
           if(options.session)
             session(options.session).add(data)
         }
-        resolve(new FetchBlobResponse(taskId, respType, data))
+        info = info || {}
+        info.rnfbEncode = rnfbEncode
+        resolve(new FetchBlobResponse(taskId, info, data))
       }
+
     })
 
   })
@@ -153,18 +175,26 @@ function fetch(...args:any):Promise {
   // method for register progress event handler and cancel request.
   promise.progress = (fn) => {
     promise.onProgress = fn
+    RNFetchBlob.enableProgressReport(taskId)
     return promise
   }
   promise.uploadProgress = (fn) => {
     promise.onUploadProgress = fn
+    RNFetchBlob.enableUploadProgressReport(taskId)
+    return promise
+  }
+  promise.stateChange = (fn) => {
+    promise.onStateChange = fn
     return promise
   }
   promise.cancel = (fn) => {
     fn = fn || function(){}
     subscription.remove()
     subscriptionUpload.remove()
+    stateEvent.remove()
     RNFetchBlob.cancelRequest(taskId, fn)
   }
+  promise.taskId = taskId
 
   return promise
 
@@ -184,25 +214,40 @@ class FetchBlobResponse {
   json : () => any;
   base64 : () => any;
   flush : () => void;
+  respInfo : RNFetchBlobResponseInfo;
   session : (name:string) => RNFetchBlobSession | null;
   readFile : (encode: 'base64' | 'utf8' | 'ascii') => ?Promise;
   readStream : (
     encode: 'utf8' | 'ascii' | 'base64',
   ) => RNFetchBlobStream | null;
 
-  constructor(taskId:string, type:'base64' | 'path', data:any) {
+  constructor(taskId:string, info:RNFetchBlobResponseInfo, data:any) {
     this.data = data
     this.taskId = taskId
-    this.type = type
+    this.type = info.rnfbEncode
+    this.respInfo = info
+
+    this.info = ():RNFetchBlobResponseInfo => {
+      return this.respInfo
+    }
     /**
-     * Convert result to javascript Blob object.
-     * @param  {string} contentType MIME type of the blob object.
-     * @param  {number} sliceSize   Slice size.
-     * @return {blob}             Return Blob object.
+     * Convert result to javascript RNFetchBlob object.
+     * @return {Promise<Blob>} Return a promise resolves Blob object.
      */
-    this.blob = (contentType:string, sliceSize:number) => {
-      console.warn('FetchBlobResponse.blob() is deprecated and has no funtionality.')
-      return null
+    this.blob = ():Promise<Blob> => {
+      return new Promise((resolve, reject) => {
+        if(this.type === 'base64') {
+          try {
+            let b = new polyfill.Blob(this.data, 'application/octet-stream;BASE64')
+            b.onCreated(() => {
+              console.log('####', b)
+              resolve(b)
+            })
+          } catch(err) {
+            reject(err)
+          }
+        }
+      })
     }
     /**
      * Convert result to text.
@@ -287,18 +332,12 @@ class FetchBlobResponse {
 
 }
 
-function getUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    let r = Math.random()*16|0, v = c == 'x' ? r : (r&0x3|0x8);
-    return v.toString(16);
-  });
-}
-
 export default {
   fetch,
   base64,
   config,
   session,
   fs,
-  wrap
+  wrap,
+  polyfill
 }

@@ -1,39 +1,44 @@
-# react-native-fetch-blob [![release](https://img.shields.io/github/release/wkh237/react-native-fetch-blob.svg?maxAge=86400&style=flat-square)](https://www.npmjs.com/package/react-native-fetch-blob) [![npm](https://img.shields.io/npm/v/react-native-fetch-blob.svg?style=flat-square)](https://www.npmjs.com/package/react-native-fetch-blob) ![](https://img.shields.io/badge/PR-Welcome-brightgreen.svg?style=flat-square) [![npm](https://img.shields.io/npm/l/express.svg?maxAge=2592000&style=flat-square)]() [![npm](https://img.shields.io/badge/inProgress-0.7.0-yellow.svg?style=flat-square)](https://github.com/wkh237/react-native-fetch-blob/milestones)
+# react-native-fetch-blob [![release](https://img.shields.io/github/release/wkh237/react-native-fetch-blob.svg?maxAge=86400&style=flat-square)](https://www.npmjs.com/package/react-native-fetch-blob) [![npm](https://img.shields.io/npm/v/react-native-fetch-blob.svg?style=flat-square)](https://www.npmjs.com/package/react-native-fetch-blob) ![](https://img.shields.io/badge/PR-Welcome-brightgreen.svg?style=flat-square) [![npm](https://img.shields.io/npm/l/react-native-fetch-blob.svg?maxAge=2592000&style=flat-square)]()
 
-A module provides upload, download, and files access API. Supports file stream read/write for process large files.
+A project committed to make file acess and data transfer easier, effiecient for React Native developers.
 
-## [Please check our github for updated document](https://github.com/wkh237/react-native-fetch-blob)
+# [Visit our Github for latest document](https://github.com/wkh237/react-native-fetch-blob)
+
+## Features
+- Transfer data directly from/to storage without BASE64 bridging
+- File API supports normal files, Asset files, and CameraRoll files
+- Native-to-native file manipulation API, reduce JS bridging performance loss
+- File stream support for dealing with large file
+- Blob, File, XMLHttpRequest polyfills that make browser-based library available in RN
 
 ## TOC
 * [About](#user-content-about)
-* [Backward Compatible](#user-content-backward-compatible)
 * [Installation](#user-content-installation)
 * [Recipes](#user-content-recipes)
+* [HTTP Data Transfer](#user-content-http-data-transfer)
+ * [Regular Request](#user-content-regular-request)
  * [Download file](#user-content-download-example--fetch-files-that-needs-authorization-token)
  * [Upload file](#user-content-upload-example--dropbox-files-upload-api)
  * [Multipart/form upload](#user-content-multipartform-data-example--post-form-data-with-file-and-data)
  * [Upload/Download progress](#user-content-uploaddownload-progress)
  * [Cancel HTTP request](#user-content-cancel-request)
  * [Android Media Scanner, and Download Manager Support](#user-content-android-media-scanner-and-download-manager-support)
+ * [Self-Signed SSL Server](#user-content-self-signed-ssl-server)
+* [File System](#user-content-file-system)
  * [File access](#user-content-file-access)
  * [File stream](#user-content-file-stream)
  * [Manage cached files](#user-content-cache-file-management)
- * [Self-Signed SSL Server](#user-content-self-signed-ssl-server)
+* [Web API Polyfills](#user-content-web-api-polyfills)
+* [Performance Tips](#user-content-performance-tips)
 * [API References](https://github.com/wkh237/react-native-fetch-blob/wiki/Fetch-API)
 * [Trouble Shooting](https://github.com/wkh237/react-native-fetch-blob/wiki/Trouble-Shooting)
 * [Development](#user-content-development)
 
 ## About
 
-React Native does not support `Blob` object at this moment, which means if you're going to send/receive binary data via `fetch` API, that might not work as you expect. See [facebook/react-native#854](https://github.com/facebook/react-native/issues/854).
+This project was initially for solving the issue [facebook/react-native#854](https://github.com/facebook/react-native/issues/854), because React Native lack of `Blob` implementation and it will cause some problem when transfering binary data. Now, this project is committed to make file access and transfer more easier, effiecient for React Native developers. We've implemented highly customizable filesystem and network module which plays well together. For example, upload and download data directly from/to storage which is much more efficient in some cases(especially for large ones). The file system supports file stream, so you don't have to worry about OOM problem when accessing large files.
 
-For some use cases, you might get into trouble. For example, displaying an image that requires a specific field in headers (ex. "Authorization : Bearer ...") or body, so you can't just pass the image uri to `Image` component because that will probably returns a 401 response. Or you're going to upload binary data which generated from JS, the server will get an empry body due to [this issue](https://github.com/facebook/react-native/issues/854). With help of APIs provided by this module, you can send HTTP request with any headers, and decide how to handle the response/reqeust data without worry about if it is not supported by `fetch` API. The response data can be just simply converted into BASE64 string, or stored to a file directly so that you can read it by using file access APIs such as readFile, readStream.
-
-This module was designed to be a substitution of `Blob`, there's a set of APIs including basic file system CRUD method, and file stream reader/writer. Also it has a special `fetch` implementation that supports binary request/response body.
-
-## Backward Compatible
-
-All updates are `backward-compatible` generally you don't have to change existing code unless you're going to use new APIs. But we recommend pre `0.5.0` users consider upgrade the package to latest version, since we have introduced new APIs can either `upload` or `download` files simply using a file path. It's much more memory efficent in some use case. We've also introduced `fs` APIs for access files, and `file stream` API that helps you read/write files (especially for **large ones**), see [Examples](#user-content-recipes) bellow. This module implements native methods, supports both Android (uses same native library as offical RN fetch API [OkHttp](https://github.com/square/okhttp)) and IOS.
+In `0.8.0` we introduced experimential Web API polyfills that make it possible to use browser-based libraries in React Native, for example, [FireBase JS SDK](https://github.com/wkh237/rn-firebase-storage-upload-sample)
 
 ## Installation
 
@@ -49,11 +54,19 @@ Link package using [rnpm](https://github.com/rnpm/rnpm)
 rnpm link
 ```
 
-### For React Native >= 0.29.0 (Android)
+### Manually link the package (Android)
 
-> If you're using react-native >= `0.29.0`, the package might not be able to link through `rnpm link`, and you might see an error screen similar to [#51](https://github.com/wkh237/react-native-fetch-blob/issues/51), this is because a [a bug in 0.29.0](https://github.com/facebook/react-native/commit/4dabb575b1b311ba541fae7eabbd49f08b5391b3), someone has already fixed it, but the solution does not work on our project, you may have to manually add the package yourself.
+If rnpm link command failed to link the package automatically, you might try manually link the package.
 
-Add this code to `MainApplication.java`
+Open `android/settings.gradle`, and add these lines which will app RNFetchBlob Android project dependency to your app.
+
+```diff
+include ':app'      
++ include ':react-native-fetch-blob'                                                                                                  
++ project(':react-native-fetch-blob').projectDir = new File(rootProject.projectDir,' ../node_modules/react-native-fetch-blob/android')                        
+```
+
+Add this line to `MainApplication.java`, so that RNFetchBlob package becomes part of react native package.
 
 ```diff
 ...
@@ -107,10 +120,43 @@ Beginning in Android 6.0 (API level 23), users grant permissions to apps while t
 
 ## Recipes
 
+ES6
+
+The module uses ES6 style export statement, simply use `import` to load the module.
+
 ```js
 import RNFetchBlob from 'react-native-fetch-blob'
 ```
+
+ES5
+
+If you're using ES5 require statement to load the module, please add `default`. See [here](https://github.com/wkh237/react-native-fetch-blob/wiki/Trouble-Shooting#rnfetchblobfetch-is-not-a-function) for more detail.
+
+```
+var RNFetchBlob = require('react-native-fetch-blob').default
+```
+
+### HTTP Data Transfer
+
+---
+
+#### Regular Request
+
+After `0.8.0` react-native-fetch-blob automatically decide how to send the body by checking its type and `Content-Type` in header. The rule is described in the following diagram
+
+<img src="img/RNFB-flow (1).png" style="width : 90%" />
+
+To sum up :
+
+- To send a form data, the `Content-Type` header won't take effect if the body is an `Array` because we will set proper content type for you.
+- To send binary data, you have two choices, use BASE64 encoded string or a file path which points to a file contains the body. The `Content-Type` header does not matters.
+ - The body is a BASE64 encoded string, the `Content-Type` header filed must containing substring`;BASE64` or `application/octet`  
+ - The body is a path point to a file, it must be a string starts with `RNFetchBlob-file://`, which can simply done by `RNFetchBlob.wrap(PATH_TO_THE_FILE)`
+- To send the body as-is, set a `Content-Type` header not containing `;BASE64` or `application/octet`.
+
 #### Download example : Fetch files that needs authorization token
+
+Most simple way is download to memory and stored as BASE64 encoded string, this is handy when the response data is small.
 
 ```js
 
@@ -136,7 +182,7 @@ RNFetchBlob.fetch('GET', 'http://www.example.com/images/img1.png', {
 
 #### Download to storage directly
 
-The simplest way is give a `fileCache` option to config, and set it to `true`. This will let the incoming response data stored in a temporary path **without** any file extension.
+If the response data is large, that would be a bad idea to convert it into BASE64 string. The better solution is store the response data directly into file system. The simplest way is give a `fileCache` option to config, and set it to `true`. This will make incoming response data stored in a temporary path **without** any file extension.
 
 **These files won't be removed automatically, please refer to [Cache File Management](#user-content-cache-file-management)**
 
@@ -181,7 +227,7 @@ RNFetchBlob
 
 **Use Specific File Path**
 
-If you prefer a specific path rather than random generated one, you can use `path` option. We've added a constant [dirs](#user-content-dirs) in v0.5.0 that contains several common used directories.
+If you prefer a specific path rather than randomly generated one, you can use `path` option. We've added a constant [dirs](#user-content-dirs) in v0.5.0 that contains several common used directories.
 
 ```js
 let dirs = RNFetchBlob.fs.dirs
@@ -269,6 +315,10 @@ Elements have property `filename` will be transformed into binary format, otherw
   }, [
     // element with property `filename` will be transformed into `file` in form data
     { name : 'avatar', filename : 'avatar.png', data: binaryDataInBase64},
+    // custom content type
+    { name : 'avatar-png', filename : 'avatar-png.png', type:'image/png', data: binaryDataInBase64},
+    // part file from storage
+    { name : 'avatar-foo', filename : 'avatar-foo.png', type:'image/foo', data: RNFetchBlob.wrap(path_to_a_file)},
     // elements without property `filename` will be sent as plain text
     { name : 'name', data : 'user'},
     { name : 'info', data : JSON.stringify({
@@ -445,6 +495,8 @@ RNFetchBlob.config({
 .then(...)
 ```
 
+### File System
+
 #### File Access
 
 File access APIs were made when developing `v0.5.0`, which helping us write tests, and was not planned to be a part of this module. However we realized that, it's hard to find a great solution to manage cached files, every one who use this moudle may need these APIs for there cases.
@@ -593,10 +645,46 @@ RNFetchBlob.config({
 })
 ```
 
+### Web API Polyfills
+
+After `0.8.0` we've made some [Web API polyfills](https://github.com/wkh237/react-native-fetch-blob/wiki/Web-API-Polyfills-(work-in-progress)) that makes some browser-based library available in RN.
+
+- Blob
+- XMLHttpRequest (Use our implementation if you're going to use it with Blob)
+
+### Performance Tips
+
+---
+
+**Reduce RCT Bridge Overhead and BASE64 Time**
+
+React Native connects JS and Native context by passing JSON through React bridge, therefore there will be an overhead to convert data before they sent. When data is large, this will be quite a performance impact to your app, it's recommended to use file storage instead of BASE64 if possible. The following chart shows how much faster when loading data from storage than BASE64 encoded string on iphone 6.
+
+<img src="img/performance_1.png" style="width : 100%"/>
+
+**ASCII Encoding has /terrible Performance**
+
+Due to the [lack of typed array implementation in JavascriptCore, and limitation of React Native structure](https://github.com/facebook/react-native/issues/1424), to convert data to JS byte array spends lot of time. Use it only when needed, the following chart shows how much time it takes when reading a file with different encoding.
+
+<img src="img/performance_encoding.png" style="width : 100%"/>
+
+**Concate and Replacing Files**
+
+If you're going to concatenate files, you don't have to read the data to JS context anymore ! In `0.8.0` we introduced new encoding `uri` for writeFile and appendFile API. Which make it possible to done the whole process in native.
+
+<img src="img/performance_f2f.png" style="width : 100%"/>
+
 ## Changes
 
 | Version | |
 |---|---|
+| 0.8.2 | Fix Android RN 0.31 installation issue #78 |
+| 0.8.1 | Remove Web API log and fix ios progress report function. |
+| 0.8.0 | Added Web API polyfills, support regular request, added timeout option. |
+| 0.7.5 | Fix installation script that make it compatible to react-native < 0.28 |
+| 0.7.4 | Fix app crash problem in version > 0.27 |
+| 0.7.3 | Fix OkHttp dependency issue in version < 0.29 |
+| 0.7.2 | Fix cancel request bug |
 | 0.7.1 | Fix #57 ios module could not compile on ios version <= 9.3 |
 | 0.7.0 | Add support of Android upload progress, and remove AsyncHttpClient dependency from Android native implementation. |
 | 0.6.4 | Fix rnpm link script. |

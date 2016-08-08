@@ -14,6 +14,7 @@
 #import "RNFetchBlobFS.h"
 #import "RNFetchBlobNetwork.h"
 #import "RNFetchBlobConst.h"
+#import "RNFetchBlobReqBuilder.h"
 #import <CommonCrypto/CommonDigest.h>
 
 ////////////////////////////////////////
@@ -23,6 +24,8 @@
 ////////////////////////////////////////
 
 NSMutableDictionary * taskTable;
+NSMutableDictionary * progressTable;
+NSMutableDictionary * uploadProgressTable;
 
 @interface RNFetchBlobNetwork ()
 {
@@ -30,6 +33,7 @@ NSMutableDictionary * taskTable;
     NSString * destPath;
     NSOutputStream * writeStream;
     long bodyLength;
+    NSMutableDictionary * respInfo;
 }
 
 @end
@@ -37,7 +41,6 @@ NSMutableDictionary * taskTable;
 @implementation RNFetchBlobNetwork
 
 NSOperationQueue *taskQueue;
-
 @synthesize taskId;
 @synthesize expectedBytes;
 @synthesize receivedBytes;
@@ -55,16 +58,35 @@ NSOperationQueue *taskQueue;
     self = [super init];
     if(taskQueue == nil) {
         taskQueue = [[NSOperationQueue alloc] init];
+        taskQueue.maxConcurrentOperationCount = 10;
     }
     if(taskTable == nil) {
         taskTable = [[NSMutableDictionary alloc] init];
     }
+    if(progressTable == nil)
+    {
+        progressTable = [[NSMutableDictionary alloc] init];
+    }
+    if(uploadProgressTable == nil)
+    {
+        uploadProgressTable = [[NSMutableDictionary alloc] init];
+    }
     return self;
 }
 
++ (void) enableProgressReport:(NSString *) taskId
+{
+    [progressTable setValue:@YES forKey:taskId];
+}
+
++ (void) enableUploadProgress:(NSString *) taskId
+{
+    [uploadProgressTable setValue:@YES forKey:taskId];
+}
 
 // removing case from headers
-+ (NSMutableDictionary *) normalizeHeaders:(NSDictionary *)headers {
++ (NSMutableDictionary *) normalizeHeaders:(NSDictionary *)headers
+{
 
     NSMutableDictionary * mheaders = [[NSMutableDictionary alloc]init];
     for(NSString * key in headers) {
@@ -74,8 +96,8 @@ NSOperationQueue *taskQueue;
     return mheaders;
 }
 
-- (NSString *)md5 {
-    const char* str = [self UTF8String];
+- (NSString *)md5:(NSString *)input {
+    const char* str = [input UTF8String];
     unsigned char result[CC_MD5_DIGEST_LENGTH];
     CC_MD5(str, (CC_LONG)strlen(str), result);
 
@@ -87,11 +109,11 @@ NSOperationQueue *taskQueue;
 }
 
 // send HTTP request
-- (void) sendRequest:(NSDictionary  * _Nullable )options
+- (void) sendRequest:(__weak NSDictionary  * _Nullable )options
        contentLength:(long) contentLength
               bridge:(RCTBridge * _Nullable)bridgeRef
               taskId:(NSString * _Nullable)taskId
-         withRequest:(NSURLRequest * _Nullable)req
+         withRequest:(__weak NSURLRequest * _Nullable)req
             callback:(_Nullable RCTResponseSenderBlock) callback
 {
     self.taskId = taskId;
@@ -105,37 +127,41 @@ NSOperationQueue *taskQueue;
     NSString * path = [self.options valueForKey:CONFIG_FILE_PATH];
     NSString * ext = [self.options valueForKey:CONFIG_FILE_EXT];
 	NSString * key = [self.options valueForKey:CONFIG_KEY];
-    NSURLSession * session;
+    __block NSURLSession * session;
 
     bodyLength = contentLength;
 
     // the session trust any SSL certification
 
-    NSURLSessionConfiguration *defaultConfigObject = [NSURLSessionConfiguration defaultSessionConfiguration];
-    session = [NSURLSession sessionWithConfiguration:defaultConfigObject delegate:self delegateQueue:[NSOperationQueue mainQueue]];
 
+    NSURLSessionConfiguration *defaultConfigObject = [NSURLSessionConfiguration defaultSessionConfiguration];
+    if([options valueForKey:@"timeout"] != nil)
+    {
+        defaultConfigObject.timeoutIntervalForRequest = [[options valueForKey:@"timeout"] floatValue]/1000;
+    }
+    session = [NSURLSession sessionWithConfiguration:defaultConfigObject delegate:self delegateQueue:taskQueue];
     if(path != nil || [self.options valueForKey:CONFIG_USE_TEMP]!= nil)
     {
         respFile = YES;
 
 		NSString* cacheKey = taskId;
 		if (key != nil) {
-			cacheKey = [key md5];
+            cacheKey = [self md5:key];
 			if (cacheKey == nil) {
 				cacheKey = taskId;
 			}
 
 			destPath = [RNFetchBlobFS getTempPath:cacheKey withExtension:[self.options valueForKey:CONFIG_FILE_EXT]];
             if ([[NSFileManager defaultManager] fileExistsAtPath:destPath]) {
-				callback([NSNull null], destPath]);
+				callback(@[[NSNull null], @[[NSNull null], destPath]);
                 return;
             }
 		}
 
         if(path != nil)
             destPath = path;
-        // else
-        //     destPath = [RNFetchBlobFS getTempPath:cacheKey withExtension:[self.options valueForKey:CONFIG_FILE_EXT]];
+        else
+            destPath = [RNFetchBlobFS getTempPath:cacheKey withExtension:[self.options valueForKey:CONFIG_FILE_EXT]];
     }
     else
     {
@@ -143,7 +169,7 @@ NSOperationQueue *taskQueue;
         respFile = NO;
     }
     NSURLSessionDataTask * task = [session dataTaskWithRequest:req];
-    [taskTable setValue:task forKey:taskId];
+    [taskTable setObject:task forKey:taskId];
     [task resume];
 
     // network status indicator
@@ -165,17 +191,70 @@ NSOperationQueue *taskQueue;
 {
     expectedBytes = [response expectedContentLength];
 
+    NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse*)response;
+    NSInteger statusCode = [(NSHTTPURLResponse *)response statusCode];
+    if ([response respondsToSelector:@selector(allHeaderFields)])
+    {
+        NSDictionary *headers = [httpResponse allHeaderFields];
+        NSString * respType = [[RNFetchBlobReqBuilder getHeaderIgnoreCases:@"content-type"
+                                                               fromHeaders:headers]
+                               lowercaseString];
+        if([headers valueForKey:@"Content-Type"] != nil)
+        {
+            if([respType containsString:@"text/"])
+            {
+                respType = @"text";
+            }
+            else if([respType containsString:@"application/json"])
+            {
+                respType = @"json";
+            }
+            else
+            {
+                respType = @"blob";
+                // for XMLHttpRequest, switch response data handling strategy automatically
+                if([options valueForKey:@"auto"] == YES) {
+                    respFile = YES;
+                    destPath = [RNFetchBlobFS getTempPath:taskId withExtension:@""];
+                }
+            }
+        }
+        else
+            respType = @"";
+        respInfo = @{
+                     @"taskId": taskId,
+                     @"state": @"2",
+                     @"headers": headers,
+                     @"respType" : respType,
+                     @"timeout" : @NO,
+                     @"status": [NSString stringWithFormat:@"%d", statusCode ]
+                     };
+
+        [self.bridge.eventDispatcher
+         sendDeviceEventWithName: EVENT_STATE_CHANGE
+         body:respInfo
+        ];
+        headers = nil;
+        respInfo = nil;
+    }
+
     if(respFile == YES)
     {
-        NSFileManager * fm = [NSFileManager defaultManager];
-        NSString * folder = [destPath stringByDeletingLastPathComponent];
-        if(![fm fileExistsAtPath:folder]) {
-            [fm createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:NULL error:nil];
+        @try{
+            NSFileManager * fm = [NSFileManager defaultManager];
+            NSString * folder = [destPath stringByDeletingLastPathComponent];
+            if(![fm fileExistsAtPath:folder]) {
+                [fm createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:NULL error:nil];
+            }
+            [fm createFileAtPath:destPath contents:[[NSData alloc] init] attributes:nil];
+            writeStream = [[NSOutputStream alloc] initToFileAtPath:destPath append:YES];
+            [writeStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+            [writeStream open];
         }
-        [fm createFileAtPath:destPath contents:[[NSData alloc] init] attributes:nil];
-        writeStream = [[NSOutputStream alloc] initToFileAtPath:destPath append:YES];
-        [writeStream scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
-        [writeStream open];
+        @catch(NSException * ex)
+        {
+            NSLog(@"write file error");
+        }
     }
     completionHandler(NSURLSessionResponseAllow);
 }
@@ -183,7 +262,8 @@ NSOperationQueue *taskQueue;
 // download progress handler
 - (void) URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data
 {
-    receivedBytes += [data length];
+    NSNumber * received = [NSNumber numberWithLong:[data length]];
+    receivedBytes += [received longValue];
     if(respFile == NO)
     {
         [respData appendData:data];
@@ -193,48 +273,81 @@ NSOperationQueue *taskQueue;
         [writeStream write:[data bytes] maxLength:[data length]];
     }
 
-    [self.bridge.eventDispatcher
-     sendDeviceEventWithName:@"RNFetchBlobProgress"
-     body:@{
-            @"taskId": taskId,
-            @"written": [NSString stringWithFormat:@"%d", receivedBytes],
-            @"total": [NSString stringWithFormat:@"%d", expectedBytes]
-            }
-     ];
+    if([progressTable valueForKey:taskId] == @YES)
+    {
+        [self.bridge.eventDispatcher
+         sendDeviceEventWithName:@"RNFetchBlobProgress"
+         body:@{
+                @"taskId": taskId,
+                @"written": [NSString stringWithFormat:@"%d", receivedBytes],
+                @"total": [NSString stringWithFormat:@"%d", expectedBytes]
+                }
+         ];
+    }
+    received = nil;
 
 }
 
-- (void) URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
-    NSLog([error localizedDescription]);
+- (void) URLSession:(NSURLSession *)session didBecomeInvalidWithError:(nullable NSError *)error
+{
+    if([session isEqual:session])
+        session = nil;
+}
+
+- (void) URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error
+{
+
     self.error = error;
     [[UIApplication sharedApplication] setNetworkActivityIndicatorVisible:NO];
+
+    NSString * respType = [respInfo valueForKey:@"respType"];
+    if(error != nil) {
+        NSLog([error localizedDescription]);
+    }
+
     if(respFile == YES)
     {
         [writeStream close];
-        callback(@[error == nil ? [NSNull null] : [error localizedDescription], destPath]);
+        callback(@[error == nil ? [NSNull null] : [error localizedDescription],
+                   respInfo == nil ? [NSNull null] : respInfo,
+                   destPath
+                ]);
     }
     // base64 response
     else {
-        callback(@[error == nil ? [NSNull null] : [error localizedDescription], [respData base64EncodedStringWithOptions:0]]);
+        NSString * res = [[NSString alloc] initWithData:respData encoding:NSUTF8StringEncoding];
+        callback(@[error == nil ? [NSNull null] : [error localizedDescription],
+                   respInfo == nil ? [NSNull null] : respInfo,
+                   [respData base64EncodedStringWithOptions:0]
+                   ]);
     }
+
+    [taskTable removeObjectForKey:taskId];
+    [uploadProgressTable removeObjectForKey:taskId];
+    [progressTable removeObjectForKey:taskId];
+    respData = nil;
+    receivedBytes = 0;
+    [session finishTasksAndInvalidate];
 }
 
 // upload progress handler
 - (void) URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didSendBodyData:(int64_t)bytesSent totalBytesSent:(int64_t)totalBytesWritten totalBytesExpectedToSend:(int64_t)totalBytesExpectedToWrite
 {
-    [self.bridge.eventDispatcher
-     sendDeviceEventWithName:@"RNFetchBlobProgress-upload"
-     body:@{
-            @"taskId": taskId,
-            @"written": [NSString stringWithFormat:@"%d", totalBytesWritten],
-            @"total": [NSString stringWithFormat:@"%d", bodyLength]
-            }
-     ];
+    if([uploadProgressTable valueForKey:taskId] == @YES) {
+        [self.bridge.eventDispatcher
+         sendDeviceEventWithName:@"RNFetchBlobProgress-upload"
+         body:@{
+                @"taskId": taskId,
+                @"written": [NSString stringWithFormat:@"%d", totalBytesWritten],
+                @"total": [NSString stringWithFormat:@"%d", bodyLength]
+                }
+         ];
+    }
 }
 
 + (void) cancelRequest:(NSString *)taskId
 {
-    NSURLSessionDataTask * task = (NSURLSessionDataTask *)[taskTable objectForKey:taskId];
+    NSURLSessionDataTask * task = [taskTable objectForKey:taskId];
     if(task != nil && task.state == NSURLSessionTaskStateRunning)
         [task cancel];
 }
@@ -285,5 +398,6 @@ NSOperationQueue *taskQueue;
         }
     }
 }
+
 
 @end

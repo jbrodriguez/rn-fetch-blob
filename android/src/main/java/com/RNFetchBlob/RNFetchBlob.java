@@ -12,7 +12,6 @@ import java.util.Map;
 
 public class RNFetchBlob extends ReactContextBaseJavaModule {
 
-    String filePathPrefix = "RNFetchBlob-file://";
     static ReactApplicationContext RCTContext;
 
     public RNFetchBlob(ReactApplicationContext reactContext) {
@@ -158,6 +157,21 @@ public class RNFetchBlob extends ReactContextBaseJavaModule {
         } catch (Exception ex) {
             callback.invoke(ex.getLocalizedMessage(), null);
         }
+    }
+
+    @ReactMethod
+    public void slice(String src, String dest, int start, int end, String encode, Callback callback) {
+        RNFetchBlobFS.slice(src, dest, start, end, encode, callback);
+    }
+
+    @ReactMethod
+    public void enableProgressReport(String taskId) {
+        RNFetchBlobReq.progressReport.put(taskId, true);
+    }
+
+    @ReactMethod
+    public void enableUploadProgressReport(String taskId) {
+        RNFetchBlobReq.uploadProgressReport.put(taskId, true);
     }
 
     @ReactMethod

@@ -42,6 +42,15 @@ type RNFetchBlobNative = {
   ls : (path:string, callback: (err:any) => void) => void,
 };
 
+type RNFetchBlobResponseInfo = {
+  taskId : string,
+  state : number,
+  headers : any,
+  status : number,
+  respType : 'text' | 'blob' | '' | 'json'
+  rnfbEncode : 'path' | 'base64' | 'ascii' | 'utf8'
+}
+
 type RNFetchBlobStream = {
   onData : () => void,
   onError : () => void,

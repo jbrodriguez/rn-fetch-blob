@@ -16,6 +16,8 @@ public class RNFetchBlobConfig {
     public Boolean trusty;
     public String key;
     public String mime;
+    public Boolean auto;
+    public long timeout = 30000;
 
     RNFetchBlobConfig(ReadableMap options) {
         if(options == null)
@@ -29,6 +31,10 @@ public class RNFetchBlobConfig {
         }
         this.key = options.hasKey("key") ? options.getString("key") : null;
         this.mime = options.hasKey("contentType") ? options.getString("contentType") : null;
+        this.auto = options.hasKey("auto") ? options.getBoolean("auto") : false;
+        if(options.hasKey("timeout")) {
+            this.timeout = options.getInt("timeout");
+        }
     }
 
 }

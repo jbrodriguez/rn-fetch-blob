@@ -63,11 +63,10 @@ RCT_EXPORT_METHOD(fetchBlobForm:(NSDictionary *)options
                   callback:(RCTResponseSenderBlock)callback)
 {
 
-    [RNFetchBlobReqBuilder buildMultipartRequest:options taskId:taskId method:method url:url headers:headers form:form onComplete:^(NSURLRequest *req, long bodyLength) {
+    [RNFetchBlobReqBuilder buildMultipartRequest:options taskId:taskId method:method url:url headers:headers form:form onComplete:^(__weak NSURLRequest *req, long bodyLength) {
         // send HTTP request
         RNFetchBlobNetwork * utils = [[RNFetchBlobNetwork alloc] init];
         [utils sendRequest:options contentLength:bodyLength bridge:self.bridge taskId:taskId withRequest:req callback:callback];
-        utils = nil;
     }];
 
 }
@@ -80,22 +79,11 @@ RCT_EXPORT_METHOD(fetchBlob:(NSDictionary *)options
                   headers:(NSDictionary *)headers
                   body:(NSString *)body callback:(RCTResponseSenderBlock)callback)
 {
-	NSString *cType = [headers valueForKey:"content-type"]
-	if (cType != nil && cType == @"application/x-www-form-urlencoded") {
-		[RNFetchBlobReqBuilder buildEncodedRequest:options taskId:taskId method:method url:url headers:headers body:body onComplete:^(NSURLRequest *req, long bodyLength) {
-	        // send HTTP request
-	        RNFetchBlobNetwork * utils = [[RNFetchBlobNetwork alloc] init];
-	        [utils sendRequest:options contentLength:bodyLength bridge:self.bridge taskId:taskId withRequest:req callback:callback];
-	        utils = nil;
-	    }];
-	} else {
-		[RNFetchBlobReqBuilder buildOctetRequest:options taskId:taskId method:method url:url headers:headers body:body onComplete:^(NSURLRequest *req, long bodyLength) {
-	        // send HTTP request
-	        RNFetchBlobNetwork * utils = [[RNFetchBlobNetwork alloc] init];
-	        [utils sendRequest:options contentLength:bodyLength bridge:self.bridge taskId:taskId withRequest:req callback:callback];
-	        utils = nil;
-	    }];
-	}
+    [RNFetchBlobReqBuilder buildOctetRequest:options taskId:taskId method:method url:url headers:headers body:body onComplete:^(NSURLRequest *req, long bodyLength) {
+        // send HTTP request
+        __block RNFetchBlobNetwork * utils = [[RNFetchBlobNetwork alloc] init];
+        [utils sendRequest:options contentLength:bodyLength bridge:self.bridge taskId:taskId withRequest:req callback:callback];
+    }];
 }
 
 RCT_EXPORT_METHOD(createFile:(NSString *)path data:(NSString *)data encoding:(NSString *)encoding callback:(RCTResponseSenderBlock)callback) {
@@ -108,6 +96,10 @@ RCT_EXPORT_METHOD(createFile:(NSString *)path data:(NSString *)data encoding:(NS
     }
     else if([[encoding lowercaseString] isEqualToString:@"base64"]) {
         fileContent = [[NSData alloc] initWithBase64EncodedData:data options:0];
+    }
+    else if([[encoding lowercaseString] isEqualToString:@"uri"]) {
+        NSString * orgPath = [data stringByReplacingOccurrencesOfString:FILE_PREFIX withString:@""];
+        fileContent = [[NSData alloc] initWithContentsOfFile:orgPath];
     }
     else {
         fileContent = [[NSData alloc] initWithData:[data dataUsingEncoding:NSASCIIStringEncoding allowLossyConversion:YES]];
@@ -152,7 +144,8 @@ RCT_EXPORT_METHOD(exists:(NSString *)path callback:(RCTResponseSenderBlock)callb
 }
 
 RCT_EXPORT_METHOD(writeFile:(NSString *)path encoding:(NSString *)encoding data:(NSString *)data append:(BOOL)append resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject {
-    [RNFetchBlobFS writeFile:path encoding:encoding data:data append:append resolver:resolve rejecter:reject];
+    
+    [RNFetchBlobFS writeFile:path encoding:[NSString stringWithString:encoding] data:data append:append resolver:resolve rejecter:reject];
 })
 
 RCT_EXPORT_METHOD(writeFileArray:(NSString *)path data:(NSArray *)data append:(BOOL)append resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject {
@@ -174,7 +167,6 @@ RCT_EXPORT_METHOD(writeStream:(NSString *)path withEncoding:(NSString *)encoding
 
 RCT_EXPORT_METHOD(writeArrayChunk:(NSString *)streamId withArray:(NSArray *)dataArray callback:(RCTResponseSenderBlock) callback) {
     RNFetchBlobFS *fs = [[RNFetchBlobFS getFileStreams] valueForKey:streamId];
-//    char bytes[[dataArray count]];
     char * bytes = (char *) malloc([dataArray count]);
     for(int i = 0; i < dataArray.count; i++) {
         bytes[i] = [[dataArray objectAtIndex:i] charValue];
@@ -361,6 +353,19 @@ RCT_EXPORT_METHOD(cancelRequest:(NSString *)taskId callback:(RCTResponseSenderBl
     callback(@[[NSNull null], taskId]);
 
 }
+
+RCT_EXPORT_METHOD(enableProgressReport:(NSString *)taskId {
+    [RNFetchBlobNetwork enableProgressReport:taskId];
+})
+
+RCT_EXPORT_METHOD(enableUploadProgressReport:(NSString *)taskId {
+    [RNFetchBlobNetwork enableUploadProgress:taskId];
+})
+
+RCT_EXPORT_METHOD(slice:(NSString *)src dest:(NSString *)dest start:(NSNumber *)start end:(NSNumber *)end resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject
+{
+    [RNFetchBlobFS slice:src dest:dest start:start end:end encode:@"" resolver:resolve rejecter:reject];
+})
 
 #pragma mark RNFetchBlob private methods
 

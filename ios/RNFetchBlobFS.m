@@ -39,7 +39,7 @@ NSMutableDictionary *fileStreams = nil;
 
 // static member getter
 + (NSArray *) getFileStreams {
-
+    
     if(fileStreams == nil)
         fileStreams = [[NSMutableDictionary alloc] init];
     return fileStreams;
@@ -58,7 +58,7 @@ NSMutableDictionary *fileStreams = nil;
     {
         assetURI = [assetURI stringByReplacingOccurrencesOfString:ASSET_PREFIX withString:@""];
         assetURI = [[NSBundle mainBundle] pathForResource: [assetURI stringByDeletingPathExtension]
-                                               ofType: [assetURI pathExtension]];
+                                                   ofType: [assetURI pathExtension]];
     }
     return assetURI;
 }
@@ -84,12 +84,12 @@ NSMutableDictionary *fileStreams = nil;
 }
 
 + (NSString *) getTempPath {
-
+    
     return [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingString:@"/RNFetchBlob_tmp"];
 }
 
 + (NSString *) getTempPath:(NSString*)taskId withExtension:(NSString *)ext {
-
+    
     NSString * documentDir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
     NSString * filename = [NSString stringWithFormat:@"/RNFetchBlob_tmp/RNFetchBlobTmp_%@", taskId];
     if(ext != nil)
@@ -185,45 +185,68 @@ NSMutableDictionary *fileStreams = nil;
     }
 }
 
-+ (void) writeFile:(NSString *)path encoding:(NSString *)encoding data:(NSString *)data append:(BOOL)append resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject {
++ (NSNumber *) writeFileFromFile:(NSString *)src toFile:(NSString *)dest append:(BOOL)append
+{
+    NSInputStream * is = [[NSInputStream alloc] initWithFileAtPath:src];
+    NSOutputStream * os = [[NSOutputStream alloc] initToFileAtPath:dest append:append];
+    [is open];
+    [os open];
+    uint8_t buffer[10240];
+    long written = 0;
+    int read = [is read:buffer maxLength:10240];
+    written += read;
+    while(read > 0) {
+        [os write:buffer maxLength:read];
+        read = [is read:buffer maxLength:10240];
+        written += read;
+    }
+    [os close];
+    [is close];
+    return [NSNumber numberWithLong:written];
+}
+
++ (void) writeFile:(NSString *)path encoding:(NSString *)encoding data:(NSString *)data append:(BOOL)append resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject
+{
+    NSLog(encoding);
     @try {
         NSFileManager * fm = [NSFileManager defaultManager];
         NSError * err = nil;
         // check if the folder exists, if not exists, create folders recursively
         // after the folders created, write data into the file
         NSString * folder = [path stringByDeletingLastPathComponent];
+        encoding = [encoding lowercaseString];
         if(![fm fileExistsAtPath:folder]) {
             [fm createDirectoryAtPath:folder withIntermediateDirectories:YES attributes:NULL error:&err];
+            [fm createFileAtPath:path contents:nil attributes:nil];
         }
-        // if file exists, write file by encoding and strategy
-        if(![fm fileExistsAtPath:path]) {
-            if([[encoding lowercaseString] isEqualToString:@"base64"]){
-                NSData * byteData = [[NSData alloc] initWithBase64EncodedString:data options:0];
-                [fm createFileAtPath:path contents:byteData attributes:NULL];
-            }
-            else
-                [fm createFileAtPath:path contents:[data dataUsingEncoding:NSUTF8StringEncoding] attributes:NULL];
+        if(err != nil) {
+            reject(@"RNFetchBlob writeFile Error", @"could not create file at path", path);
+            return;
+        }
+        NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:path];
+        NSData * content = nil;
+        if([encoding isEqualToString:@"base64"]) {
+            content = [[NSData alloc] initWithBase64EncodedString:data options:0];
+        }
+        else if([encoding isEqualToString:@"uri"]) {
+            NSNumber* size = [[self class] writeFileFromFile:data toFile:path append:append];
+            resolve(size);
+            return;
         }
         else {
-            NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:path];
-            NSData * content = nil;
-            if([[encoding lowercaseString] isEqualToString:@"base64"]) {
-                content = [[NSData alloc] initWithBase64EncodedString:data options:0];
-            }
-            else {
-                content = [data dataUsingEncoding:NSUTF8StringEncoding];
-            }
-            if(append == YES) {
-                [fileHandle seekToEndOfFile];
-                [fileHandle writeData:content];
-                [fileHandle closeFile];
-            }
-            else {
-                [content writeToFile:path atomically:YES];
-            }
+            content = [data dataUsingEncoding:NSISOLatin1StringEncoding];
+        }
+        if(append == YES) {
+            [fileHandle seekToEndOfFile];
+            [fileHandle writeData:content];
+            [fileHandle closeFile];
+        }
+        else {
+            [content writeToFile:path atomically:YES];
         }
         fm = nil;
-        resolve([NSNull null]);
+        
+        resolve([NSNumber numberWithInteger:[content length]]);
     }
     @catch (NSException * e)
     {
@@ -265,7 +288,7 @@ NSMutableDictionary *fileStreams = nil;
         }
         free(bytes);
         fm = nil;
-        resolve([NSNull null]);
+        resolve([NSNumber numberWithInteger: data.count]);
     }
     @catch (NSException * e)
     {
@@ -281,9 +304,9 @@ NSMutableDictionary *fileStreams = nil;
     @try
     {
         [[self class] getPathFromUri:path completionHandler:^(NSString *path, ALAssetRepresentation *asset) {
-            NSData * fileContent;
+            __block NSData * fileContent;
             NSError * err;
-            Byte * buffer;
+            __block Byte * buffer;
             if(asset != nil)
             {
                 buffer = malloc(asset.size);
@@ -443,11 +466,11 @@ NSMutableDictionary *fileStreams = nil;
         [self.outStream close];
         self.outStream = nil;
     }
-
+    
 }
 
 - (void)readWithPath:(NSString *)path useEncoding:(NSString *)encoding bufferSize:(int) bufferSize {
-
+    
     self.inStream = [[NSInputStream alloc] initWithFileAtPath:path];
     self.inStream.delegate = self;
     self.encoding = encoding;
@@ -475,33 +498,78 @@ NSMutableDictionary *fileStreams = nil;
     });
 }
 
+// Slice a file into another file, generally for support Blob implementation.
+- (void)slice:(NSString *)path
+         dest:(NSString *)dest
+        start:(NSNumber *)start
+          end:(NSNumber *)end
+        encod:(NSString *)encode
+     resolver:(RCTPromiseResolveBlock)resolve
+     rejecter:(RCTPromiseRejectBlock)reject
+{
+    long expected = [end longValue] - [start longValue];
+    long read = 0;
+    NSFileHandle * handle = [NSFileHandle fileHandleForReadingAtPath:path];
+    NSFileManager * fm = [NSFileManager defaultManager];
+    NSOutputStream * os = [[NSOutputStream alloc] initToFileAtPath:dest append:NO];
+    [os open];
+    // abort for the source file not exists
+    if([fm fileExistsAtPath:path] == NO)
+    {
+        reject(@"RNFetchBlob slice failed", @"the file does not exists", path);
+        return;
+    }
+    long size = [fm attributesOfItemAtPath:path error:nil].fileSize;
+    // abort for the file size is less than start
+    if(size < start)
+    {
+        reject(@"RNFetchBlob slice failed", @"start is greater than file size", @"");
+        return;
+    }
+    if(![fm fileExistsAtPath:dest]) {
+        [fm createFileAtPath:dest contents:@"" attributes:nil];
+    }
+    [handle seekToFileOffset:start];
+    while(read < expected)
+    {
+        NSData * chunk = [handle readDataOfLength:10240];
+        read += [chunk length];
+        [os write:[chunk bytes] maxLength:10240];
+    }
+    [handle closeFile];
+    [os close];
+    resolve(dest);
+    
+}
+
 // close file read stream
-- (void)closeInStream {
+- (void)closeInStream
+{
     if(self.inStream != nil) {
         [self.inStream close];
         [self.inStream removeFromRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
         [[RNFetchBlobFS getFileStreams] setValue:nil forKey:self.streamId];
         self.streamId = nil;
     }
-
+    
 }
 
 #pragma mark RNFetchBlobFS read stream delegate
 
 - (void)stream:(NSStream *)stream handleEvent:(NSStreamEvent)eventCode {
-
+    
     NSString * streamEventCode = [NSString stringWithFormat:@"RNFetchBlobStream+%@", self.path];
-
+    
     switch(eventCode) {
-
-        // write stream event
+            
+            // write stream event
         case NSStreamEventHasSpaceAvailable:
         {
-
-
+            
+            
         }
-
-        // read stream incoming chunk
+            
+            // read stream incoming chunk
         case NSStreamEventHasBytesAvailable:
         {
             NSMutableData * chunkData = [[NSMutableData alloc] init];
@@ -535,13 +603,13 @@ NSMutableDictionary *fileStreams = nil;
                             [asciiArray addObject:[NSNumber numberWithChar:bytePtr[i]]];
                         }
                     }
-
+                    
                     [self.bridge.eventDispatcher
                      sendDeviceEventWithName:streamEventCode
                      body: @{
                              @"event": FS_EVENT_DATA,
                              @"detail": asciiArray
-                            }
+                             }
                      ];
                     return;
                 }
@@ -560,7 +628,7 @@ NSMutableDictionary *fileStreams = nil;
                      ];
                     return;
                 }
-
+                
                 [self.bridge.eventDispatcher
                  sendDeviceEventWithName:streamEventCode
                  body:@{
@@ -581,8 +649,8 @@ NSMutableDictionary *fileStreams = nil;
             }
             break;
         }
-
-        // stream error
+            
+            // stream error
         case NSStreamEventErrorOccurred:
         {
             [self.bridge.eventDispatcher
@@ -594,9 +662,9 @@ NSMutableDictionary *fileStreams = nil;
              ];
             break;
         }
-
+            
     }
-
+    
 }
 
 + (void) getPathFromUri:(NSString *)uri completionHandler:(void(^)(NSString * path, ALAssetRepresentation *asset)) onComplete
@@ -604,10 +672,11 @@ NSMutableDictionary *fileStreams = nil;
     if([uri hasPrefix:AL_PREFIX])
     {
         NSURL *asseturl = [NSURL URLWithString:uri];
-        ALAssetsLibrary* assetslibrary = [[ALAssetsLibrary alloc] init];
+        __block ALAssetsLibrary* assetslibrary = [[ALAssetsLibrary alloc] init];
         [assetslibrary assetForURL:asseturl
                        resultBlock:^(ALAsset *asset) {
-                           onComplete(nil, [asset defaultRepresentation]);
+                           __block ALAssetRepresentation * present = [asset defaultRepresentation];
+                           onComplete(nil, present);
                        }
                       failureBlock:^(NSError *error) {
                           onComplete(nil, nil);

@@ -20,10 +20,12 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.bridge.WritableNativeArray;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -74,14 +76,38 @@ public class RNFetchBlobFS {
                     String path = args[0];
                     String encoding = args[1];
                     String data = args[2];
+                    int written = 0;
                     File f = new File(path);
                     File dir = f.getParentFile();
                     if(!dir.exists())
                         dir.mkdirs();
                     FileOutputStream fout = new FileOutputStream(f, append);
-                    fout.write(stringToBytes(data, encoding));
+                    // write data from a file
+                    if(encoding.equalsIgnoreCase(RNFetchBlobConst.DATA_ENCODE_URI)) {
+                        File src = new File(data);
+                        if(!src.exists()) {
+                            promise.reject("RNfetchBlob writeFileError", "source file : " + data + "not exists");
+                            fout.close();
+                            return null;
+                        }
+                        FileInputStream fin = new FileInputStream(src);
+                        byte [] buffer = new byte [10240];
+                        int read = fin.read(buffer);
+                        written = read;
+                        while(read > 0) {
+                            fout.write(buffer, 0, read);
+                            read = fin.read(buffer);
+                            written += read;
+                        }
+                        fin.close();
+                    }
+                    else {
+                        byte[] bytes = stringToBytes(data, encoding);
+                        fout.write(bytes);
+                        written = bytes.length;
+                    }
                     fout.close();
-                    promise.resolve(Arguments.createArray());
+                    promise.resolve(written);
                 } catch (Exception e) {
                     promise.reject("RNFetchBlob writeFileError", e.getLocalizedMessage());
                 }
@@ -115,7 +141,7 @@ public class RNFetchBlobFS {
                     }
                     os.write(bytes);
                     os.close();
-                    promise.resolve(null);
+                    promise.resolve(data.size());
                 } catch (Exception e) {
                     promise.reject("RNFetchBlob writeFileError", e.getLocalizedMessage());
                 }
@@ -387,13 +413,24 @@ public class RNFetchBlobFS {
      */
     static void unlink(String path, Callback callback) {
         try {
-            boolean success = new File(path).delete();
-            callback.invoke( null, success);
+            RNFetchBlobFS.deleteRecursive(new File(path));
+            callback.invoke(null, true);
         } catch(Exception err) {
             if(err != null)
-            callback.invoke(err.getLocalizedMessage());
+            callback.invoke(err.getLocalizedMessage(), false);
         }
     }
+
+    static void deleteRecursive(File fileOrDirectory) {
+
+        if (fileOrDirectory.isDirectory()) {
+            for (File child : fileOrDirectory.listFiles()) {
+                deleteRecursive(child);
+            }
+        }
+        fileOrDirectory.delete();
+    }
+
     /**
      * Make a folder
      * @param path Source path
@@ -512,6 +549,39 @@ public class RNFetchBlobFS {
         callback.invoke(null, arg);
     }
 
+    /**
+     * Create a file by slicing given file path
+     * @param src   Source file path
+     * @param dest  Destination of created file
+     * @param start Start byte offset in source file
+     * @param end   End byte offset
+     * @param encode
+     * @param callback
+     */
+    public static void slice(String src, String dest, int start, int end, String encode, Callback callback) {
+        try {
+            long expected = end - start;
+            long now = 0;
+            FileInputStream in = new FileInputStream(new File(src));
+            FileOutputStream out = new FileOutputStream(new File(dest));
+            in.skip(start);
+            byte [] buffer = new byte[10240];
+            while(now < expected) {
+                long read = in.read(buffer, 0, 10240);
+                if(read <= 0) {
+                    break;
+                }
+                now += read;
+                out.write(buffer, 0, (int) read);
+            }
+            in.close();
+            out.close();
+            callback.invoke(null, dest);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
     static void lstat(String path, final Callback callback) {
         path = normalizePath(path);
 
@@ -623,12 +693,32 @@ public class RNFetchBlobFS {
         try {
             File dest = new File(path);
             boolean created = dest.createNewFile();
-            if(!created) {
-                callback.invoke("create file error: failed to create file at path `" + path + "` for its parent path may not exists");
-                return;
+            if(encoding.equals(RNFetchBlobConst.DATA_ENCODE_URI)) {
+                String orgPath = data.replace(RNFetchBlobConst.FILE_PREFIX, "");
+                File src = new File(orgPath);
+                if(!src.exists()) {
+                    callback.invoke("RNfetchBlob writeFileError", "source file : " + data + "not exists");
+                    return ;
+                }
+                FileInputStream fin = new FileInputStream(src);
+                OutputStream ostream = new FileOutputStream(dest);
+                byte [] buffer = new byte [10240];
+                int read = fin.read(buffer);
+                while(read > 0) {
+                    ostream.write(buffer, 0, read);
+                    read = fin.read(buffer);
+                }
+                fin.close();
+                ostream.close();
             }
-            OutputStream ostream = new FileOutputStream(dest);
-            ostream.write(RNFetchBlobFS.stringToBytes(data, encoding));
+            else {
+                if (!created) {
+                    callback.invoke("create file error: failed to create file at path `" + path + "` for its parent path may not exists");
+                    return;
+                }
+                OutputStream ostream = new FileOutputStream(dest);
+                ostream.write(RNFetchBlobFS.stringToBytes(data, encoding));
+            }
             callback.invoke(null, path);
         } catch(Exception err) {
             callback.invoke(err.getLocalizedMessage());
