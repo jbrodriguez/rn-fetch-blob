@@ -43,7 +43,7 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 import okhttp3.ResponseBody;
-
+import okhttp3.FormBody;
 
 /**
  * Created by wkh237 on 2016/6/21.
@@ -226,7 +226,6 @@ public class RNFetchBlobReq extends BroadcastReceiver implements Runnable {
                 requestType = RequestType.WithoutBody;
             }
 
-
             // set request body
             switch (requestType) {
                 case SingleFile:
@@ -238,13 +237,28 @@ public class RNFetchBlobReq extends BroadcastReceiver implements Runnable {
                     ));
                     break;
                 case AsIs:
-                    builder.method(method, new RNFetchBlobBody(
-                            taskId,
-                            requestType,
-                            rawRequestBody,
-                            MediaType.parse(getHeaderIgnoreCases(mheaders, "content-type"))
-                    ));
-                    break;
+					String cType = getHeaderIgnoreCases(mheaders, "Content-Type").toLowerCase();
+					if ("application/x-www-form-urlencoded".equals(cType)) {
+						FormBody.Builder formBuilder = new FormBody.Builder();
+
+						String[] pairs = rawRequestBody.split("&");
+						for ( String pair : pairs ) {
+							String[] kv = pair.split("=");
+							formBuilder.add(kv[0], kv[1]);
+						}
+
+						RequestBody body = formBuilder.build();
+
+						builder.method(method, body);
+					} else {
+						builder.method(method, new RNFetchBlobBody(
+	                            taskId,
+	                            requestType,
+	                            rawRequestBody,
+	                            MediaType.parse(getHeaderIgnoreCases(mheaders, "content-type"))
+	                    ));
+					}
+					break;
                 case Form:
                     builder.method(method, new RNFetchBlobBody(
                             taskId,
