@@ -153,7 +153,7 @@ NSOperationQueue *taskQueue;
 
 			destPath = [RNFetchBlobFS getTempPath:cacheKey withExtension:[self.options valueForKey:CONFIG_FILE_EXT]];
             if ([[NSFileManager defaultManager] fileExistsAtPath:destPath]) {
-				callback(@[[NSNull null], @[[NSNull null], destPath]);
+				callback(@[[NSNull null], [NSNull null], destPath]);
                 return;
             }
 		}
