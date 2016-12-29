@@ -28,7 +28,9 @@ const dirs = {
     MusicDir : RNFetchBlob.MusicDir,
     MovieDir : RNFetchBlob.MovieDir,
     DownloadDir : RNFetchBlob.DownloadDir,
-    DCIMDir : RNFetchBlob.DCIMDir
+    DCIMDir : RNFetchBlob.DCIMDir,
+    SDCardDir : RNFetchBlob.SDCardDir,
+    MainBundleDir : RNFetchBlob.MainBundleDir
 }
 
 /**
@@ -60,15 +62,15 @@ function createFile(path:string, data:string, encoding: 'base64' | 'ascii' | 'ut
   return new Promise((resolve, reject) => {
     let handler = (err) => {
       if(err)
-      reject(err)
+        reject(new Error(err))
       else
-      resolve()
+        resolve()
     }
     if(encoding.toLowerCase() === 'ascii') {
       if(Array.isArray(data))
         RNFetchBlob.createFileASCII(path, data, handler)
       else
-        reject('`data` of ASCII file must be an array contains numbers')
+        reject(new Error('`data` of ASCII file must be an array contains numbers'))
     }
     else {
       RNFetchBlob.createFile(path, data, encoding, handler)
@@ -95,7 +97,7 @@ function writeStream(
   return new Promise((resolve, reject) => {
     RNFetchBlob.writeStream(path, encoding || 'base64', append || false, (err, streamId:string) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve(new RNFetchBlobWriteStream(streamId, encoding))
     })
@@ -112,9 +114,10 @@ function writeStream(
 function readStream(
   path : string,
   encoding : 'utf8' | 'ascii' | 'base64',
-  bufferSize? : ?number
+  bufferSize? : ?number,
+  tick : ?number = 10
 ):Promise<RNFetchBlobReadStream> {
-  return Promise.resolve(new RNFetchBlobReadStream(path, encoding, bufferSize))
+  return Promise.resolve(new RNFetchBlobReadStream(path, encoding, bufferSize, tick))
 }
 
 /**
@@ -127,7 +130,7 @@ function mkdir(path:string):Promise {
   return new Promise((resolve, reject) => {
     RNFetchBlob.mkdir(path, (err, res) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve()
     })
@@ -143,7 +146,7 @@ function mkdir(path:string):Promise {
  */
 function readFile(path:string, encoding:string, bufferSize:?number):Promise<any> {
   if(typeof path !== 'string')
-    return Promise.reject('Invalid argument "path" ')
+    return Promise.reject(new Error('Invalid argument "path" '))
   return RNFetchBlob.readFile(path, encoding)
 }
 
@@ -160,12 +163,12 @@ function writeFile(path:string, data:string | Array<number>, encoding:?string):P
     return Promise.reject('Invalid argument "path" ')
   if(encoding.toLocaleLowerCase() === 'ascii') {
     if(!Array.isArray(data))
-      Promise.reject(`Expected "data" is an Array when encoding is "ascii", however got ${typeof data}`)
+      Promise.reject(new Error(`Expected "data" is an Array when encoding is "ascii", however got ${typeof data}`))
     else
       return RNFetchBlob.writeFileArray(path, data, false);
   } else {
     if(typeof data !== 'string')
-      Promise.reject(`Expected "data" is a String when encoding is "utf8" or "base64", however got ${typeof data}`)
+      Promise.reject(new Error(`Expected "data" is a String when encoding is "utf8" or "base64", however got ${typeof data}`))
     else
       return RNFetchBlob.writeFile(path, encoding, data, false);
   }
@@ -177,12 +180,12 @@ function appendFile(path:string, data:string | Array<number>, encoding:?string):
     return Promise.reject('Invalid argument "path" ')
   if(encoding.toLocaleLowerCase() === 'ascii') {
     if(!Array.isArray(data))
-      Promise.reject(`Expected "data" is an Array when encoding is "ascii", however got ${typeof data}`)
+      Promise.reject(new Error(`Expected "data" is an Array when encoding is "ascii", however got ${typeof data}`))
     else
       return RNFetchBlob.writeFileArray(path, data, true);
   } else {
     if(typeof data !== 'string')
-      Promise.reject(`Expected "data" is a String when encoding is "utf8" or "base64", however got ${typeof data}`)
+      Promise.reject(new Error(`Expected "data" is a String when encoding is "utf8" or "base64", however got ${typeof data}`))
     else
       return RNFetchBlob.writeFile(path, encoding, data, true);
   }
@@ -197,7 +200,7 @@ function stat(path:string):Promise<RNFetchBlobFile> {
   return new Promise((resolve, reject) => {
     RNFetchBlob.stat(path, (err, stat) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve(stat)
     })
@@ -213,7 +216,7 @@ function scanFile(pairs:any):Promise {
   return new Promise((resolve, reject) => {
     RNFetchBlob.scanFile(pairs, (err) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve()
     })
@@ -224,7 +227,7 @@ function cp(path:string, dest:string):Promise<boolean> {
   return new Promise((resolve, reject) => {
     RNFetchBlob.cp(path, dest, (err, res) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve(res)
     })
@@ -235,7 +238,7 @@ function mv(path:string, dest:string):Promise<boolean> {
   return new Promise((resolve, reject) => {
     RNFetchBlob.mv(path, dest, (err, res) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve(res)
     })
@@ -246,7 +249,7 @@ function lstat(path:string):Promise<Array<RNFetchBlobFile>> {
   return new Promise((resolve, reject) => {
     RNFetchBlob.lstat(path, (err, stat) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve(stat)
     })
@@ -257,7 +260,7 @@ function ls(path:string):Promise<Array<String>> {
   return new Promise((resolve, reject) => {
     RNFetchBlob.ls(path, (err, res) => {
       if(err)
-        reject(err)
+        reject(new Error(err))
       else
         resolve(res)
     })
@@ -272,8 +275,9 @@ function ls(path:string):Promise<Array<String>> {
 function unlink(path:string):Promise {
   return new Promise((resolve, reject) => {
     RNFetchBlob.unlink(path, (err) => {
-      if(err)
-        reject(err)
+      if(err) {
+        reject(new Error(err))
+      }
       else
         resolve()
     })
@@ -293,10 +297,32 @@ function exists(path:string):Promise<bool, bool> {
         resolve(exist)
       })
     } catch(err) {
-      reject(err)
+      reject(new Error(err))
     }
   })
 
+}
+
+function slice(src:string, dest:string, start:number, end:number):Promise {
+  let p = Promise.resolve()
+  let size = 0
+  function normalize(num, size) {
+    if(num < 0)
+      return Math.max(0, size + num)
+    if(!num && num !== 0)
+      return size
+    return num
+  }
+  if(start < 0 || end < 0 || !start || !end) {
+    p = p.then(() => stat(src))
+         .then((stat) => {
+           size = Math.floor(stat.size)
+           start = normalize(start || 0, size)
+           end = normalize(end, size)
+           return Promise.resolve()
+         })
+  }
+  return p.then(() => RNFetchBlob.slice(src, dest, start, end))
 }
 
 function isDir(path:string):Promise<bool, bool> {
@@ -307,10 +333,21 @@ function isDir(path:string):Promise<bool, bool> {
         resolve(isDir)
       })
     } catch(err) {
-      reject(err)
+      reject(new Error(err))
     }
   })
 
+}
+
+function df():Promise<{ free : number, total : number }> {
+  return new Promise((resolve, reject) => {
+    RNFetchBlob.df((err, stat) => {
+      if(err)
+        reject(err)
+      else
+        resolve(stat)
+    })
+  })
 }
 
 export default {
@@ -333,5 +370,7 @@ export default {
   lstat,
   scanFile,
   dirs,
-  asset
+  slice,
+  asset,
+  df
 }

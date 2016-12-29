@@ -1,18 +1,18 @@
 package com.RNFetchBlob;
 
-import android.app.LoaderManager;
-import android.content.ContentResolver;
-import android.content.CursorLoader;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.res.AssetFileDescriptor;
-import android.database.Cursor;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Environment;
-import android.os.Looper;
-import android.provider.MediaStore;
+import android.os.StatFs;
+import android.os.SystemClock;
 import android.util.Base64;
 
+import com.RNFetchBlob.Utils.PathResolver;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.Promise;
@@ -20,12 +20,10 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.WritableArray;
 import com.facebook.react.bridge.WritableMap;
-import com.facebook.react.bridge.WritableNativeArray;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,9 +33,6 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * Created by wkh237 on 2016/5/26.
- */
 public class RNFetchBlobFS {
 
     ReactApplicationContext mCtx;
@@ -66,89 +61,72 @@ public class RNFetchBlobFS {
      * @param path Destination file path.
      * @param encoding Encoding of the string.
      * @param data Array passed from JS context.
-     * @param promise
+     * @param promise RCT Promise
      */
     static public void writeFile(String path, String encoding, String data, final boolean append, final Promise promise) {
-        AsyncTask<String, Integer, Integer> task = new AsyncTask<String, Integer, Integer>() {
-            @Override
-            protected Integer doInBackground(String... args) {
-                try {
-                    String path = args[0];
-                    String encoding = args[1];
-                    String data = args[2];
-                    int written = 0;
-                    File f = new File(path);
-                    File dir = f.getParentFile();
-                    if(!dir.exists())
-                        dir.mkdirs();
-                    FileOutputStream fout = new FileOutputStream(f, append);
-                    // write data from a file
-                    if(encoding.equalsIgnoreCase(RNFetchBlobConst.DATA_ENCODE_URI)) {
-                        File src = new File(data);
-                        if(!src.exists()) {
-                            promise.reject("RNfetchBlob writeFileError", "source file : " + data + "not exists");
-                            fout.close();
-                            return null;
-                        }
-                        FileInputStream fin = new FileInputStream(src);
-                        byte [] buffer = new byte [10240];
-                        int read = fin.read(buffer);
-                        written = read;
-                        while(read > 0) {
-                            fout.write(buffer, 0, read);
-                            read = fin.read(buffer);
-                            written += read;
-                        }
-                        fin.close();
-                    }
-                    else {
-                        byte[] bytes = stringToBytes(data, encoding);
-                        fout.write(bytes);
-                        written = bytes.length;
-                    }
+        try {
+            int written = 0;
+            File f = new File(path);
+            File dir = f.getParentFile();
+            if(!dir.exists())
+                dir.mkdirs();
+            FileOutputStream fout = new FileOutputStream(f, append);
+            // write data from a file
+            if(encoding.equalsIgnoreCase(RNFetchBlobConst.DATA_ENCODE_URI)) {
+                data = normalizePath(data);
+                File src = new File(data);
+                if(!src.exists()) {
+                    promise.reject("RNfetchBlob writeFileError", "source file : " + data + "not exists");
                     fout.close();
-                    promise.resolve(written);
-                } catch (Exception e) {
-                    promise.reject("RNFetchBlob writeFileError", e.getLocalizedMessage());
+                    return ;
                 }
-                return null;
+                FileInputStream fin = new FileInputStream(src);
+                byte [] buffer = new byte [10240];
+                int read;
+                written = 0;
+                while((read = fin.read(buffer)) > 0) {
+                    fout.write(buffer, 0, read);
+                    written += read;
+                }
+                fin.close();
             }
-        };
-        task.execute(path, encoding, data);
+            else {
+                byte[] bytes = stringToBytes(data, encoding);
+                fout.write(bytes);
+                written = bytes.length;
+            }
+            fout.close();
+            promise.resolve(written);
+        } catch (Exception e) {
+            promise.reject("RNFetchBlob writeFileError", e.getLocalizedMessage());
+        }
     }
 
     /**
      * Write array of bytes into file
      * @param path Destination file path.
      * @param data Array passed from JS context.
-     * @param promise
+     * @param promise RCT Promise
      */
     static public void writeFile(String path, ReadableArray data, final boolean append, final Promise promise) {
-        AsyncTask<Object, Void, Void> task = new AsyncTask<Object, Void, Void>() {
-            @Override
-            protected Void doInBackground(Object... args) {
-                try {
-                    String path = (String)args[0];
-                    ReadableArray data = (ReadableArray) args[1];
-                    File f = new File(path);
-                    File dir = f.getParentFile();
-                    if(!dir.exists())
-                        dir.mkdirs();
-                    FileOutputStream os = new FileOutputStream(f, append);
-                    byte [] bytes = new byte[data.size()];
-                    for(int i=0;i<data.size();i++) {
-                        bytes[i] = (byte) data.getInt(i);
-                    }
-                    os.write(bytes);
-                    os.close();
-                    promise.resolve(data.size());
-                } catch (Exception e) {
-                    promise.reject("RNFetchBlob writeFileError", e.getLocalizedMessage());
-                }
-                return null;
+
+        try {
+
+            File f = new File(path);
+            File dir = f.getParentFile();
+            if(!dir.exists())
+                dir.mkdirs();
+            FileOutputStream os = new FileOutputStream(f, append);
+            byte [] bytes = new byte[data.size()];
+            for(int i=0;i<data.size();i++) {
+                bytes[i] = (byte) data.getInt(i);
             }
-        };
-        task.execute(path, data);
+            os.write(bytes);
+            os.close();
+            promise.resolve(data.size());
+        } catch (Exception e) {
+            promise.reject("RNFetchBlob writeFileError", e.getLocalizedMessage());
+        }
     }
 
     /**
@@ -159,58 +137,49 @@ public class RNFetchBlobFS {
      */
     static public void readFile(String path, String encoding, final Promise promise ) {
         path = normalizePath(path);
-        AsyncTask<String, Integer, Integer> task = new AsyncTask<String, Integer, Integer>() {
-            @Override
-            protected Integer doInBackground(String... strings) {
+        try {
+            byte[] bytes;
 
-                try {
-                    String path = strings[0];
-                    String encoding = strings[1];
-                    byte[] bytes;
-
-                    if(path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
-                        String assetName = path.replace(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET, "");
-                        long length = RNFetchBlob.RCTContext.getAssets().openFd(assetName).getLength();
-                        bytes = new byte[(int) length];
-                        InputStream in = RNFetchBlob.RCTContext.getAssets().open(assetName);
-                        in.read(bytes, 0, (int) length);
-                        in.close();
-                    }
-                    else {
-                        File f = new File(path);
-                        int length = (int) f.length();
-                        bytes = new byte[length];
-                        FileInputStream in = new FileInputStream(f);
-                        in.read(bytes);
-                        in.close();
-                    }
-
-                    switch (encoding.toLowerCase()) {
-                        case "base64" :
-                            promise.resolve(Base64.encodeToString(bytes, Base64.NO_WRAP));
-                            break;
-                        case "ascii" :
-                            WritableArray asciiResult = Arguments.createArray();
-                            for(byte b : bytes) {
-                                asciiResult.pushInt((int)b);
-                            }
-                            promise.resolve(asciiResult);
-                            break;
-                        case "utf8" :
-                            promise.resolve(new String(bytes));
-                            break;
-                        default:
-                            promise.resolve(new String(bytes));
-                            break;
-                    }
-                }
-                catch(Exception err) {
-                    promise.reject("ReadFile Error", err.getLocalizedMessage());
-                }
-                return null;
+            if(path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
+                String assetName = path.replace(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET, "");
+                long length = RNFetchBlob.RCTContext.getAssets().openFd(assetName).getLength();
+                bytes = new byte[(int) length];
+                InputStream in = RNFetchBlob.RCTContext.getAssets().open(assetName);
+                in.read(bytes, 0, (int) length);
+                in.close();
             }
-        };
-        task.execute(path, encoding);
+            else {
+                File f = new File(path);
+                int length = (int) f.length();
+                bytes = new byte[length];
+                FileInputStream in = new FileInputStream(f);
+                in.read(bytes);
+                in.close();
+            }
+
+            switch (encoding.toLowerCase()) {
+                case "base64" :
+                    promise.resolve(Base64.encodeToString(bytes, Base64.NO_WRAP));
+                    break;
+                case "ascii" :
+                    WritableArray asciiResult = Arguments.createArray();
+                    for(byte b : bytes) {
+                        asciiResult.pushInt((int)b);
+                    }
+                    promise.resolve(asciiResult);
+                    break;
+                case "utf8" :
+                    promise.resolve(new String(bytes));
+                    break;
+                default:
+                    promise.resolve(new String(bytes));
+                    break;
+            }
+        }
+        catch(Exception err) {
+            promise.reject("ReadFile Error", err.getLocalizedMessage());
+        }
+
     }
 
     /**
@@ -219,6 +188,7 @@ public class RNFetchBlobFS {
      */
     static public Map<String, Object> getSystemfolders(ReactApplicationContext ctx) {
         Map<String, Object> res = new HashMap<>();
+
         res.put("DocumentDir", ctx.getFilesDir().getAbsolutePath());
         res.put("CacheDir", ctx.getCacheDir().getAbsolutePath());
         res.put("DCIMDir", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM).getAbsolutePath());
@@ -227,6 +197,12 @@ public class RNFetchBlobFS {
         res.put("DownloadDir", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS).getAbsolutePath());
         res.put("MovieDir", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES).getAbsolutePath());
         res.put("RingtoneDir", Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_RINGTONES).getAbsolutePath());
+        String state;
+        state = Environment.getExternalStorageState();
+        if (state.equals(Environment.MEDIA_MOUNTED)) {
+            res.put("SDCard", Environment.getExternalStorageDirectory().getAbsolutePath());
+        }
+        res.put("MainBundleDir", ctx.getApplicationInfo().dataDir);
         return res;
     }
 
@@ -237,7 +213,7 @@ public class RNFetchBlobFS {
      * @return
      */
     static public String getTmpPath(ReactApplicationContext ctx, String taskId) {
-        return ctx.getFilesDir() + "/RNFetchBlobTmp_" + taskId;
+        return RNFetchBlob.RCTContext.getFilesDir() + "/RNFetchBlobTmp_" + taskId;
     }
 
     /**
@@ -246,77 +222,72 @@ public class RNFetchBlobFS {
      * @param encoding  File stream decoder, should be one of `base64`, `utf8`, `ascii`
      * @param bufferSize    Buffer size of read stream, default to 4096 (4095 when encode is `base64`)
      */
-    public void readStream( String path, String encoding, int bufferSize) {
+    public void readStream(String path, String encoding, int bufferSize, int tick, final String streamId) {
         path = normalizePath(path);
-        AsyncTask<String, Integer, Integer> task = new AsyncTask<String, Integer, Integer>() {
-            @Override
-            protected Integer doInBackground(String ... args) {
-                String path = args[0];
-                String encoding = args[1];
-                int bufferSize = Integer.parseInt(args[2]);
-                String eventName = "RNFetchBlobStream+" + path;
-                try {
+        try {
 
-                    int chunkSize = encoding.equalsIgnoreCase("base64") ? 4095 : 4096;
-                    if(bufferSize > 0)
-                        chunkSize = bufferSize;
+            int chunkSize = encoding.equalsIgnoreCase("base64") ? 4095 : 4096;
+            if(bufferSize > 0)
+                chunkSize = bufferSize;
 
-                    InputStream fs;
-                    if(path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
-                        fs = RNFetchBlob.RCTContext.getAssets().open(path.replace(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET, ""));
-                    }
-                    else {
-                        fs = new FileInputStream(new File(path));
-                    }
-
-                    byte[] buffer = new byte[chunkSize];
-                    int cursor = 0;
-                    boolean error = false;
-
-                    if (encoding.equalsIgnoreCase("utf8")) {
-                        while ((cursor = fs.read(buffer)) != -1) {
-                            String chunk = new String(buffer, 0, cursor, "UTF-8");
-                            emitStreamEvent(eventName, "data", chunk);
-                        }
-                    } else if (encoding.equalsIgnoreCase("ascii")) {
-                        while ((cursor = fs.read(buffer)) != -1) {
-                            WritableArray chunk = Arguments.createArray();
-                            for(int i =0;i<cursor;i++)
-                            {
-                                chunk.pushInt((int)buffer[i]);
-                            }
-                            emitStreamEvent(eventName, "data", chunk);
-                        }
-                    } else if (encoding.equalsIgnoreCase("base64")) {
-                        while ((cursor = fs.read(buffer)) != -1) {
-                            if(cursor < chunkSize) {
-                                byte [] copy = new byte[cursor];
-                                for(int i =0;i<cursor;i++) {
-                                    copy[i] = buffer[i];
-                                }
-                                emitStreamEvent(eventName, "data", Base64.encodeToString(copy, Base64.NO_WRAP));
-                            }
-                            else
-                                emitStreamEvent(eventName, "data", Base64.encodeToString(buffer, Base64.NO_WRAP));
-                        }
-                    } else {
-                        String msg = "unrecognized encoding `" + encoding + "`";
-                        emitStreamEvent(eventName, "error", msg);
-                        error = true;
-                    }
-
-                    if(!error)
-                        emitStreamEvent(eventName, "end", "");
-                    fs.close();
-                    buffer = null;
-
-                } catch (Exception err) {
-                    emitStreamEvent(eventName, "error", err.getLocalizedMessage());
-                }
-                return null;
+            InputStream fs;
+            if(path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
+                fs = RNFetchBlob.RCTContext.getAssets().open(path.replace(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET, ""));
             }
-        };
-        task.execute(path, encoding, String.valueOf(bufferSize));
+            else {
+                fs = new FileInputStream(new File(path));
+            }
+
+            byte[] buffer = new byte[chunkSize];
+            int cursor = 0;
+            boolean error = false;
+
+            if (encoding.equalsIgnoreCase("utf8")) {
+                while ((cursor = fs.read(buffer)) != -1) {
+                    String chunk = new String(buffer, 0, cursor, "UTF-8");
+                    emitStreamEvent(streamId, "data", chunk);
+                    if(tick > 0)
+                        SystemClock.sleep(tick);
+                }
+            } else if (encoding.equalsIgnoreCase("ascii")) {
+                while ((cursor = fs.read(buffer)) != -1) {
+                    WritableArray chunk = Arguments.createArray();
+                    for(int i =0;i<cursor;i++)
+                    {
+                        chunk.pushInt((int)buffer[i]);
+                    }
+                    emitStreamEvent(streamId, "data", chunk);
+                    if(tick > 0)
+                        SystemClock.sleep(tick);
+                }
+            } else if (encoding.equalsIgnoreCase("base64")) {
+                while ((cursor = fs.read(buffer)) != -1) {
+                    if(cursor < chunkSize) {
+                        byte [] copy = new byte[cursor];
+                        for(int i =0;i<cursor;i++) {
+                            copy[i] = buffer[i];
+                        }
+                        emitStreamEvent(streamId, "data", Base64.encodeToString(copy, Base64.NO_WRAP));
+                    }
+                    else
+                        emitStreamEvent(streamId, "data", Base64.encodeToString(buffer, Base64.NO_WRAP));
+                    if(tick > 0)
+                        SystemClock.sleep(tick);
+                }
+            } else {
+                String msg = "unrecognized encoding `" + encoding + "`";
+                emitStreamEvent(streamId, "error", msg);
+                error = true;
+            }
+
+            if(!error)
+                emitStreamEvent(streamId, "end", "");
+            fs.close();
+            buffer = null;
+
+        } catch (Exception err) {
+            emitStreamEvent(streamId, "error", err.getLocalizedMessage());
+        }
     }
 
     /**
@@ -374,16 +345,15 @@ public class RNFetchBlobFS {
      */
     static void writeArrayChunk(String streamId, ReadableArray data, Callback callback) {
 
-        RNFetchBlobFS fs = fileStreams.get(streamId);
-        OutputStream stream = fs.writeStreamInstance;
-        byte [] chunk = new byte[data.size()];
-        for(int i =0; i< data.size();i++) {
-            chunk[i] = (byte) data.getInt(i);
-        }
         try {
+            RNFetchBlobFS fs = fileStreams.get(streamId);
+            OutputStream stream = fs.writeStreamInstance;
+            byte [] chunk = new byte[data.size()];
+            for(int i =0; i< data.size();i++) {
+                chunk[i] = (byte) data.getInt(i);
+            }
             stream.write(chunk);
             callback.invoke();
-            chunk = null;
         } catch (Exception e) {
             callback.invoke(e.getLocalizedMessage());
         }
@@ -452,6 +422,7 @@ public class RNFetchBlobFS {
      * @param callback  JS context callback
      */
     static void cp(String path, String dest, Callback callback) {
+
         path = normalizePath(path);
         InputStream in = null;
         OutputStream out = null;
@@ -462,28 +433,30 @@ public class RNFetchBlobFS {
                 callback.invoke("cp error: source file at path`" + path + "` not exists");
                 return;
             }
-
             if(!new File(dest).exists())
                 new File(dest).createNewFile();
 
             in = inputStreamFromPath(path);
             out = new FileOutputStream(dest);
 
-            byte[] buf = new byte[1024];
+            byte[] buf = new byte[10240];
             int len;
             while ((len = in.read(buf)) > 0) {
                 out.write(buf, 0, len);
             }
 
         } catch (Exception err) {
-            if(err != null)
-                callback.invoke(err.getLocalizedMessage());
+            callback.invoke(err.getLocalizedMessage());
         } finally {
             try {
-                in.close();
-                out.close();
+                if (in != null) {
+                    in.close();
+                }
+                if (out != null) {
+                    out.close();
+                }
                 callback.invoke();
-            } catch (IOException e) {
+            } catch (Exception e) {
                 callback.invoke(e.getLocalizedMessage());
             }
         }
@@ -511,7 +484,7 @@ public class RNFetchBlobFS {
      * @param callback  JS context callback
      */
     static void exists(String path, Callback callback) {
-        path = normalizePath(path);
+
         if(isAsset(path)) {
             try {
                 String filename = path.replace(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET, "");
@@ -522,11 +495,11 @@ public class RNFetchBlobFS {
             }
         }
         else {
+            path = normalizePath(path);
             boolean exist = new File(path).exists();
             boolean isDir = new File(path).isDirectory();
             callback.invoke(exist, isDir);
         }
-
     }
 
     /**
@@ -555,12 +528,19 @@ public class RNFetchBlobFS {
      * @param dest  Destination of created file
      * @param start Start byte offset in source file
      * @param end   End byte offset
-     * @param encode
-     * @param callback
+     * @param encode NOT IMPLEMENTED
      */
-    public static void slice(String src, String dest, int start, int end, String encode, Callback callback) {
+    public static void slice(String src, String dest, int start, int end, String encode, Promise promise) {
         try {
-            long expected = end - start;
+            src = normalizePath(src);
+            File source = new File(src);
+            if(!source.exists()) {
+                promise.reject("RNFetchBlob.slice error", "source file : " + src + " not exists");
+                return;
+            }
+            long size = source.length();
+            long max = Math.min(size, end);
+            long expected = max - start;
             long now = 0;
             FileInputStream in = new FileInputStream(new File(src));
             FileOutputStream out = new FileOutputStream(new File(dest));
@@ -568,17 +548,20 @@ public class RNFetchBlobFS {
             byte [] buffer = new byte[10240];
             while(now < expected) {
                 long read = in.read(buffer, 0, 10240);
+                long remain = expected - now;
                 if(read <= 0) {
                     break;
                 }
+                out.write(buffer, 0, (int) Math.min(remain, read));
                 now += read;
-                out.write(buffer, 0, (int) read);
             }
             in.close();
+            out.flush();
             out.close();
-            callback.invoke(null, dest);
+            promise.resolve(dest);
         } catch (Exception e) {
             e.printStackTrace();
+            promise.reject(e.getLocalizedMessage());
         }
     }
 
@@ -616,6 +599,7 @@ public class RNFetchBlobFS {
      */
     static void stat(String path, Callback callback) {
         try {
+            path = normalizePath(path);
             WritableMap result = statFile(path);
             if(result == null)
                 callback.invoke("stat error: failed to list path `" + path + "` for it is not exist or it is not a folder", null);
@@ -684,10 +668,10 @@ public class RNFetchBlobFS {
 
     /**
      * Create new file at path
-     * @param path
-     * @param data
-     * @param encoding
-     * @param callback
+     * @param path The destination path of the new file.
+     * @param data Initial data of the new file.
+     * @param encoding Encoding of initial data.
+     * @param callback RCT bridge callback.
      */
     static void createFile(String path, String data, String encoding, Callback callback) {
         try {
@@ -713,7 +697,7 @@ public class RNFetchBlobFS {
             }
             else {
                 if (!created) {
-                    callback.invoke("create file error: failed to create file at path `" + path + "` for its parent path may not exists");
+                    callback.invoke("create file error: failed to create file at path `" + path + "` for its parent path may not exists, or the file already exists. If you intended to overwrite the existing file use fs.writeFile instead.");
                     return;
                 }
                 OutputStream ostream = new FileOutputStream(dest);
@@ -756,6 +740,20 @@ public class RNFetchBlobFS {
         }
     }
 
+    static void df(Callback callback) {
+        StatFs stat = new StatFs(Environment.getDataDirectory().getPath());
+        WritableMap args = Arguments.createMap();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+            args.putString("internal_free", String.valueOf(stat.getFreeBytes()));
+            args.putString("internal_total", String.valueOf(stat.getTotalBytes()));
+            StatFs statEx = new StatFs(Environment.getExternalStorageDirectory().getPath());
+            args.putString("external_free", String.valueOf(statEx.getFreeBytes()));
+            args.putString("external_total", String.valueOf(statEx.getTotalBytes()));
+
+        }
+        callback.invoke(null ,args);
+    }
+
     /**
      * Remove files in session.
      * @param paths An array of file paths.
@@ -792,8 +790,9 @@ public class RNFetchBlobFS {
         if(encoding.equalsIgnoreCase("ascii")) {
             return data.getBytes(Charset.forName("US-ASCII"));
         }
-        else if(encoding.equalsIgnoreCase("base64")) {
+        else if(encoding.toLowerCase().contains("base64")) {
             return Base64.decode(data, Base64.NO_WRAP);
+
         }
         else if(encoding.equalsIgnoreCase("utf8")) {
             return data.getBytes(Charset.forName("UTF-8"));
@@ -807,14 +806,14 @@ public class RNFetchBlobFS {
      * @param event Event name, `data`, `end`, `error`, etc.
      * @param data  Event data
      */
-    void emitStreamEvent(String streamName, String event, String data) {
+    private void emitStreamEvent(String streamName, String event, String data) {
         WritableMap eventData = Arguments.createMap();
         eventData.putString("event", event);
         eventData.putString("detail", data);
         this.emitter.emit(streamName, eventData);
     }
 
-    void emitStreamEvent(String streamName, String event, WritableArray  data) {
+    private void emitStreamEvent(String streamName, String event, WritableArray data) {
         WritableMap eventData = Arguments.createMap();
         eventData.putString("event", event);
         eventData.putArray("detail", data);
@@ -832,8 +831,8 @@ public class RNFetchBlobFS {
     /**
      * Get input stream of the given path, when the path is a string starts with bundle-assets://
      * the stream is created by Assets Manager, otherwise use FileInputStream.
-     * @param path
-     * @return
+     * @param path The file to open stream
+     * @return InputStream instance
      * @throws IOException
      */
     static InputStream inputStreamFromPath(String path) throws IOException {
@@ -845,8 +844,8 @@ public class RNFetchBlobFS {
 
     /**
      * Check if the asset or the file exists
-     * @param path
-     * @return
+     * @param path A file path URI string
+     * @return A boolean value represents if the path exists.
      */
     static boolean isPathExists(String path) {
         if(path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
@@ -863,29 +862,24 @@ public class RNFetchBlobFS {
 
     }
 
-    public static boolean isAsset(String path) {
-        return path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET);
+    static boolean isAsset(String path) {
+        if(path != null)
+            return path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET);
+        return false;
     }
 
-    public static String normalizePath(String path) {
+    static String normalizePath(String path) {
+        if(path == null)
+            return null;
+        Uri uri = Uri.parse(path);
+        if(uri.getScheme() == null) {
+            return path;
+        }
         if(path.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
             return path;
         }
-        else if (path.startsWith(RNFetchBlobConst.FILE_PREFIX_CONTENT)) {
-            String filePath = null;
-            Uri uri = Uri.parse(path);
-            if (uri != null && "content".equals(uri.getScheme())) {
-                ContentResolver resolver = RNFetchBlob.RCTContext.getContentResolver();
-                Cursor cursor = resolver.query(uri, new String[] { MediaStore.Images.ImageColumns.DATA }, null, null, null);
-                cursor.moveToFirst();
-                filePath = cursor.getString(0);
-                cursor.close();
-            } else {
-                filePath = uri.getPath();
-            }
-            return filePath;
-        }
-        return path;
+        else
+            return PathResolver.getRealPathFromURI(RNFetchBlob.RCTContext, uri);
     }
 
 }

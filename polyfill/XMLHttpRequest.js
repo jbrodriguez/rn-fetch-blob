@@ -7,10 +7,12 @@ import XMLHttpRequestEventTarget from './XMLHttpRequestEventTarget.js'
 import Log from '../utils/log.js'
 import Blob from './Blob.js'
 import ProgressEvent from './ProgressEvent.js'
+import URIUtil from '../utils/uri'
 
 const log = new Log('XMLHttpRequest')
 
 log.disable()
+// log.level(3)
 
 const UNSENT = 0
 const OPENED = 1
@@ -23,21 +25,26 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
   _onreadystatechange : () => void;
 
   upload : XMLHttpRequestEventTarget = new XMLHttpRequestEventTarget();
+  static binaryContentTypes : Array<string> = [
+    'image/', 'video/', 'audio/'
+  ];
 
   // readonly
   _readyState : number = UNSENT;
+  _uriType : 'net' | 'file' = 'net';
   _response : any = '';
-  _responseText : any = null;
+  _responseText : any = '';
   _responseHeaders : any = {};
-  _responseType : '' | 'arraybuffer' | 'blob' | 'document' | 'json' | 'text' = '';
+  _responseType : '' | 'arraybuffer' | 'blob'  | 'json' | 'text' = '';
   // TODO : not suppoted ATM
   _responseURL : null = '';
   _responseXML : null = '';
   _status : number = 0;
   _statusText : string = '';
-  _timeout : number = 0;
+  _timeout : number = 60000;
   _sendFlag : boolean = false;
   _uploadStarted : boolean = false;
+  _increment : boolean = false;
 
   // RNFetchBlob compatible data structure
   _config : RNFetchBlobConfig = {};
@@ -46,6 +53,7 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
   _headers: any = {
     'Content-Type' : 'text/plain'
   };
+  _cleanUp : () => void = null;
   _body: any;
 
   // RNFetchBlob promise object, which has `progress`, `uploadProgress`, and
@@ -79,9 +87,35 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     return DONE
   }
 
+  static setLog(level:number) {
+    if(level === -1)
+      log.disable()
+    else
+      log.level(level)
+  }
+
+  static addBinaryContentType(substr:string) {
+    for(let i in XMLHttpRequest.binaryContentTypes) {
+      if(new RegExp(substr,'i').test(XMLHttpRequest.binaryContentTypes[i])) {
+        return
+      }
+    }
+    XMLHttpRequest.binaryContentTypes.push(substr)
+
+  }
+
+  static removeBinaryContentType(val) {
+    for(let i in XMLHttpRequest.binaryContentTypes) {
+      if(new RegExp(substr,'i').test(XMLHttpRequest.binaryContentTypes[i])) {
+        XMLHttpRequest.binaryContentTypes.splice(i,1)
+        return
+      }
+    }
+  }
+
   constructor() {
-    super()
     log.verbose('XMLHttpRequest constructor called')
+    super()
   }
 
 
@@ -99,6 +133,8 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     this._method = method
     this._url = url
     this._headers = {}
+    this._increment = URIUtil.isJSONStreamURI(this._url)
+    this._url = this._url.replace(/^JSONStream\:\/\//, '')
     this._dispatchReadStateChange(XMLHttpRequest.OPENED)
   }
 
@@ -108,9 +144,11 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
    */
   send(body) {
 
+    this._body = body
+
     if(this._readyState !== XMLHttpRequest.OPENED)
       throw 'InvalidStateError : XMLHttpRequest is not opened yet.'
-
+    let promise = Promise.resolve()
     this._sendFlag = true
     log.verbose('XMLHttpRequest send ', body)
     let {_method, _url, _headers } = this
@@ -118,24 +156,53 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     log.verbose(typeof body, body instanceof FormData)
 
     if(body instanceof Blob) {
-      body = RNFetchBlob.wrap(body.getRNFetchBlobRef())
+      log.debug('sending blob body', body._blobCreated)
+      promise = new Promise((resolve, reject) => {
+          body.onCreated((blob) => {
+            // when the blob is derived (not created by RN developer), the blob
+            // will be released after XMLHttpRequest sent
+            if(blob.isDerived) {
+              this._cleanUp = () => {
+                blob.close()
+              }
+            }
+            log.debug('body created send request')
+            body = RNFetchBlob.wrap(blob.getRNFetchBlobRef())
+            resolve()
+          })
+        })
     }
     else if(typeof body === 'object') {
       body = JSON.stringify(body)
+      promise = Promise.resolve()
     }
-    else
+    else {
       body = body ? body.toString() : body
+      promise = Promise.resolve()
+    }
 
-    this._task = RNFetchBlob
-                  .config({ auto: true, timeout : this._timeout })
-                  .fetch(_method, _url, _headers, body)
-    this.dispatchEvent('load')
-    this._task
-        .stateChange(this._headerReceived.bind(this))
-        .uploadProgress(this._uploadProgressEvent.bind(this))
-        .progress(this._progressEvent.bind(this))
-        .catch(this._onError.bind(this))
-        .then(this._onDone.bind(this))
+    promise.then(() => {
+      log.debug('send request invoke', body)
+      for(let h in _headers) {
+        _headers[h] = _headers[h].toString()
+      }
+
+      this._task = RNFetchBlob
+                    .config({
+                      auto: true,
+                      timeout : this._timeout,
+                      increment : this._increment,
+                      binaryContentTypes : XMLHttpRequest.binaryContentTypes
+                    })
+                    .fetch(_method, _url, _headers, body)
+      this._task
+          .stateChange(this._headerReceived.bind(this))
+          .uploadProgress(this._uploadProgressEvent.bind(this))
+          .progress(this._progressEvent.bind(this))
+          .catch(this._onError.bind(this))
+          .then(this._onDone.bind(this))
+
+    })
   }
 
   overrideMimeType(mime:string) {
@@ -188,10 +255,10 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
   }
 
   getResponseHeader(field:string):string | null {
-    log.verbose('XMLHttpRequest get header', field)
+    log.verbose('XMLHttpRequest get header', field, this._responseHeaders)
     if(!this._responseHeaders)
       return null
-    return this.responseHeaders[field] || null
+    return (this._responseHeaders[field] || this._responseHeaders[field.toLowerCase()]) || null
 
   }
 
@@ -202,25 +269,23 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     let result = ''
     let respHeaders = this.responseHeaders
     for(let i in respHeaders) {
-      result += `${i}:${respHeaders[i]}\r\n`
+      result += `${i}: ${respHeaders[i]}${String.fromCharCode(0x0D,0x0A)}`
     }
-    return result
+    return result.substr(0, result.length-2)
   }
 
   _headerReceived(e) {
-    log.verbose('header received ', this._task.taskId, e)
+    log.debug('header received ', this._task.taskId, e)
     this.responseURL = this._url
     if(e.state === "2") {
       this._responseHeaders = e.headers
       this._statusText = e.status
-      this._responseType = e.respType || ''
       this._status = Math.floor(e.status)
       this._dispatchReadStateChange(XMLHttpRequest.HEADERS_RECEIVED)
     }
   }
 
   _uploadProgressEvent(send:number, total:number) {
-    console.log('_upload', this.upload)
     if(!this._uploadStarted) {
       this.upload.dispatchEvent('loadstart')
       this._uploadStarted = true
@@ -230,7 +295,7 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     this.upload.dispatchEvent('progress', new ProgressEvent(true, send, total))
   }
 
-  _progressEvent(send:number, total:number) {
+  _progressEvent(send:number, total:number, chunk:string) {
     log.verbose(this.readyState)
     if(this._readyState === XMLHttpRequest.HEADERS_RECEIVED)
       this._dispatchReadStateChange(XMLHttpRequest.LOADING)
@@ -238,16 +303,24 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     if(total && total >= 0)
         lengthComputable = true
     let e = new ProgressEvent(lengthComputable, send, total)
+
+    if(this._increment) {
+      this._responseText += chunk
+    }
     this.dispatchEvent('progress', e)
   }
 
   _onError(err) {
-    log.verbose('XMLHttpRequest error', err)
+    let statusCode = Math.floor(this.status)
+    if(statusCode >= 100 && statusCode !== 408) {
+      return
+    }
+    log.debug('XMLHttpRequest error', err)
     this._statusText = err
     this._status = String(err).match(/\d+/)
     this._status = this._status ? Math.floor(this.status) : 404
     this._dispatchReadStateChange(XMLHttpRequest.DONE)
-    if(err && String(err.message).match(/(timed\sout|timedout)/)) {
+    if(err && String(err.message).match(/(timed\sout|timedout)/) || this._status == 408) {
       this.dispatchEvent('timeout')
     }
     this.dispatchEvent('loadend')
@@ -259,33 +332,41 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
   }
 
   _onDone(resp) {
-    log.verbose('XMLHttpRequest done', this._url, resp)
+    log.debug('XMLHttpRequest done', this._url, resp, this)
     this._statusText = this._status
+    let responseDataReady = () => {
+      log.debug('request done state = 4')
+      this.dispatchEvent('load')
+      this.dispatchEvent('loadend')
+      this._dispatchReadStateChange(XMLHttpRequest.DONE)
+      this.clearEventListeners()
+    }
     if(resp) {
-      switch(resp.type) {
-        case 'base64' :
-          if(this._responseType === 'json') {
-              this._responseText = resp.text()
-              this._response = resp.json()
-          }
-          else {
+      let info = resp.respInfo || {}
+      log.debug(this._url, info, info.respType)
+      switch(this._responseType) {
+        case 'blob' :
+          resp.blob().then((b) => {
             this._responseText = resp.text()
-            this._response = this.responseText
-          }
+            this._response = b
+            responseDataReady()
+          })
         break;
-        case 'path' :
-          this.response = resp.blob()
-        break;
+        case 'arraybuffer':
+          // TODO : to array buffer
+        break
+        case 'json':
+          this._response = resp.json()
+          this._responseText = resp.text()
+        break
         default :
           this._responseText = resp.text()
           this._response = this.responseText
+          responseDataReady()
         break;
       }
-      this.dispatchEvent('loadend')
-      this.dispatchEvent('load')
-      this._dispatchReadStateChange(XMLHttpRequest.DONE)
     }
-    this.clearEventListeners()
+
   }
 
   _dispatchReadStateChange(state) {
@@ -295,7 +376,7 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
   }
 
   set onreadystatechange(fn:() => void) {
-    log.verbose('XMLHttpRequest set onreadystatechange', fn.toString())
+    log.verbose('XMLHttpRequest set onreadystatechange', fn)
     this._onreadystatechange = fn
   }
 
@@ -348,9 +429,18 @@ export default class XMLHttpRequest extends XMLHttpRequestEventTarget{
     return this._timeout
   }
 
+  set responseType(val) {
+    log.verbose('set response type', this._responseType)
+    this._responseType = val
+  }
+
   get responseType() {
     log.verbose('get response type', this._responseType)
     return this._responseType
+  }
+
+  static get isRNFBPolyfill() {
+    return true
   }
 
 }

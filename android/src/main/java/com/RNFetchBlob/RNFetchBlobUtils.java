@@ -1,5 +1,9 @@
 package com.RNFetchBlob;
 
+import com.facebook.react.bridge.Arguments;
+import com.facebook.react.bridge.WritableMap;
+import com.facebook.react.modules.core.DeviceEventManagerModule;
+
 import java.security.MessageDigest;
 import java.security.cert.CertificateException;
 
@@ -12,9 +16,7 @@ import javax.net.ssl.X509TrustManager;
 
 import okhttp3.OkHttpClient;
 
-/**
- * Created by wkh237 on 2016/7/11.
- */
+
 public class RNFetchBlobUtils {
 
     public static String getMD5(String input) {
@@ -38,6 +40,16 @@ public class RNFetchBlobUtils {
             return result;
         }
 
+    }
+
+    public static void emitWarningEvent(String data) {
+        WritableMap args = Arguments.createMap();
+        args.putString("event", "warn");
+        args.putString("detail", data);
+
+        // emit event to js context
+        RNFetchBlob.RCTContext.getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                .emit(RNFetchBlobConst.EVENT_MESSAGE, args);
     }
 
     public static OkHttpClient.Builder getUnsafeOkHttpClient() {

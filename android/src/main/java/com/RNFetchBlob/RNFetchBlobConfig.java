@@ -1,12 +1,11 @@
 package com.RNFetchBlob;
 
+import com.facebook.react.bridge.ReadableArray;
 import com.facebook.react.bridge.ReadableMap;
 
 import java.util.HashMap;
 
-/**
- * Created by wkh237 on 2016/5/29.
- */
+
 public class RNFetchBlobConfig {
 
     public Boolean fileCache;
@@ -17,7 +16,10 @@ public class RNFetchBlobConfig {
     public String key;
     public String mime;
     public Boolean auto;
-    public long timeout = 30000;
+    public Boolean overwrite = true;
+    public long timeout = 60000;
+    public Boolean increment = false;
+    public ReadableArray binaryContentTypes = null;
 
     RNFetchBlobConfig(ReadableMap options) {
         if(options == null)
@@ -29,8 +31,17 @@ public class RNFetchBlobConfig {
         if(options.hasKey("addAndroidDownloads")) {
             this.addAndroidDownloads = options.getMap("addAndroidDownloads");
         }
+        if(options.hasKey("binaryContentTypes"))
+            this.binaryContentTypes = options.getArray("binaryContentTypes");
+        if(this.path != null && path.toLowerCase().contains("?append=true")) {
+            this.overwrite = false;
+        }
+
+        if(options.hasKey("overwrite"))
+            this.overwrite = options.getBoolean("overwrite");
         this.key = options.hasKey("key") ? options.getString("key") : null;
         this.mime = options.hasKey("contentType") ? options.getString("contentType") : null;
+        this.increment = options.hasKey("increment") ? options.getBoolean("increment") : false;
         this.auto = options.hasKey("auto") ? options.getBoolean("auto") : false;
         if(options.hasKey("timeout")) {
             this.timeout = options.getInt("timeout");

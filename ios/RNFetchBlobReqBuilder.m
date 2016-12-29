@@ -11,6 +11,8 @@
 #import "RNFetchBlobNetwork.h"
 #import "RNFetchBlobConst.h"
 #import "RNFetchBlobFS.h"
+#import "RCTLog.h"
+#import "IOS7Polyfill.h"
 
 @interface RNFetchBlobReqBuilder()
 {
@@ -32,15 +34,15 @@
 {
     //    NSString * encodedUrl = [url stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
     NSString * encodedUrl = url;
-
+    
     // send request
     __block NSMutableURLRequest *request = [[NSMutableURLRequest alloc] initWithURL:[NSURL URLWithString: encodedUrl]];
-    NSMutableDictionary *mheaders = [[NSMutableDictionary alloc] initWithDictionary:[RNFetchBlobNetwork normalizeHeaders:headers]];
+    __block NSMutableDictionary *mheaders = [[NSMutableDictionary alloc] initWithDictionary:[RNFetchBlobNetwork normalizeHeaders:headers]];
     NSTimeInterval timeStamp = [[NSDate date] timeIntervalSince1970];
     NSNumber * timeStampObj = [NSNumber numberWithDouble: timeStamp];
 
     // generate boundary
-    NSString * boundary = [NSString stringWithFormat:@"RNFetchBlob%d", timeStampObj];
+    __block NSString * boundary = [NSString stringWithFormat:@"RNFetchBlob%d", timeStampObj];
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         __block NSMutableData * postData = [[NSMutableData alloc] init];
         // combine multipart/form-data body
@@ -52,8 +54,8 @@
                 [request setHTTPBody:postData];
             }
             // set content-length
-            [mheaders setValue:[NSString stringWithFormat:@"%d",[postData length]] forKey:@"Content-Length"];
-            [mheaders setValue:[NSString stringWithFormat:@"100-continue",[postData length]] forKey:@"Expect"];
+            [mheaders setValue:[NSString stringWithFormat:@"%lu",[postData length]] forKey:@"Content-Length"];
+            [mheaders setValue:@"100-continue" forKey:@"Expect"];
             // appaned boundary to content-type
             [mheaders setValue:[NSString stringWithFormat:@"multipart/form-data; charset=utf-8; boundary=%@", boundary] forKey:@"content-type"];
             [request setHTTPMethod: method];
@@ -76,10 +78,8 @@
 //    NSString * encodedUrl = [url stringByAddingPercentEscapesUsingEncoding:NSUTF8StringEncoding];
     NSString * encodedUrl = url;
     // send request
-	__block NSMutableURLRequest *request = [[NSMutableURLRequest alloc]
-                                    initWithURL:[NSURL URLWithString: encodedUrl]
-									cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-									timeoutInterval:60];
+    __block NSMutableURLRequest *request = [[NSMutableURLRequest alloc]
+                                    initWithURL:[NSURL URLWithString: encodedUrl]];
 
     __block NSMutableDictionary *mheaders = [[NSMutableDictionary alloc] initWithDictionary:[RNFetchBlobNetwork normalizeHeaders:headers]];
     // move heavy task to another thread
@@ -91,12 +91,13 @@
             // generate octet-stream body
             if(body != nil) {
                 __block NSString * cType = [[self class] getHeaderIgnoreCases:@"content-type" fromHeaders:mheaders];
+                __block NSString * transferEncoding = [[self class] getHeaderIgnoreCases:@"transfer-encoding" fromHeaders:mheaders];
                 // when headers does not contain a key named "content-type" (case ignored), use default content type
                 if(cType == nil)
                 {
                     [mheaders setValue:@"application/octet-stream" forKey:@"Content-Type"];
                 }
-
+                
                 // when body is a string contains file path prefix, try load file from the path
                 if([body hasPrefix:FILE_PREFIX]) {
                     __block NSString * orgPath = [body substringFromIndex:[FILE_PREFIX length]];
@@ -112,15 +113,28 @@
                         return;
                     }
                     size = [[[NSFileManager defaultManager] attributesOfItemAtPath:orgPath error:nil] fileSize];
-                    [request setHTTPBodyStream: [NSInputStream inputStreamWithFileAtPath:orgPath ]];
+                    if(transferEncoding != nil && [[transferEncoding lowercaseString] isEqualToString:@"chunked"])
+                    {
+                        [request setHTTPBodyStream: [NSInputStream inputStreamWithFileAtPath:orgPath ]];
+                    }
+                    else
+                    {
+                        __block NSData * bodyBytes = [NSData dataWithContentsOfFile:orgPath ];
+                        [request setHTTPBody:bodyBytes];
+                    }
                 }
                 // otherwise convert it as BASE64 data string
                 else {
-
+                    
                     __block NSString * cType = [[self class]getHeaderIgnoreCases:@"content-type" fromHeaders:mheaders];
                     // when content-type is application/octet* decode body string using BASE64 decoder
-                    if([[cType lowercaseString] hasPrefix:@"application/octet"] || [[cType lowercaseString] containsString:@";base64"])
+                    if([[cType lowercaseString] hasPrefix:@"application/octet"] || [[cType lowercaseString] RNFBContainsString:@";base64"])
                     {
+                        __block NSString * ncType = [[cType stringByReplacingOccurrencesOfString:@";base64" withString:@""]stringByReplacingOccurrencesOfString:@";BASE64" withString:@""];
+                        if([mheaders valueForKey:@"content-type"] != nil)
+                            [mheaders setValue:ncType forKey:@"content-type"];
+                        if([mheaders valueForKey:@"Content-Type"] != nil)
+                            [mheaders setValue:ncType forKey:@"Content-Type"];
                         blobData = [[NSData alloc] initWithBase64EncodedString:body options:0];
                         [request setHTTPBody:blobData];
                         size = [blobData length];
@@ -144,21 +158,30 @@
 
 +(void) buildFormBody:(NSArray *)form boundary:(NSString *)boundary onComplete:(void(^)(NSData * formData))onComplete
 {
-    NSMutableData * formData = [[NSMutableData alloc] init];
+    __block NSMutableData * formData = [[NSMutableData alloc] init];
     if(form == nil)
         onComplete(nil);
     else
     {
         __block int i = 0;
         __block int count = [form count];
+        // a recursive block that builds multipart body asynchornously
         void __block (^getFieldData)(id field) = ^(id field)
         {
             NSString * name = [field valueForKey:@"name"];
-            NSString * content = [field valueForKey:@"data"];
+            __block NSString * content = [field valueForKey:@"data"];
             NSString * contentType = [field valueForKey:@"type"];
+            // skip when the form field `name` or `data` is empty
+            if(content == nil || name == nil)
+            {
+                i++;
+                getFieldData([form objectAtIndex:i]);
+                RCTLogWarn(@"RNFetchBlob multipart request builder has found a field without `data` or `name` property, the field will be removed implicitly.");
+                return;
+            }
             contentType = contentType == nil ? @"application/octet-stream" : contentType;
             // field is a text field
-            if([field valueForKey:@"filename"] == nil || content == [NSNull null]) {
+            if([field valueForKey:@"filename"] == nil || content == nil) {
                 [formData appendData:[[NSString stringWithFormat:@"--%@\r\n", boundary] dataUsingEncoding:NSUTF8StringEncoding]];
                 [formData appendData:[[NSString stringWithFormat:@"Content-Disposition: form-data; name=\"%@\"\r\n", name] dataUsingEncoding:NSUTF8StringEncoding]];
                 [formData appendData:[[NSString stringWithFormat:@"Content-Type: text/plain\r\n\r\n"] dataUsingEncoding:NSUTF8StringEncoding]];
@@ -184,10 +207,14 @@
                             i++;
                             if(i < count)
                             {
-                                getFieldData([form objectAtIndex:i]);
+                                __block NSDictionary * nextField = [form objectAtIndex:i];
+                                getFieldData(nextField);
                             }
                             else
+                            {
                                 onComplete(formData);
+                                getFieldData = nil;
+                            }
                         }];
                         return ;
                     }
@@ -200,29 +227,35 @@
                 [formData appendData:[[NSString stringWithFormat:@"Content-Type: %@\r\n\r\n", contentType] dataUsingEncoding:NSUTF8StringEncoding]];
                 [formData appendData:blobData];
                 [formData appendData:[[NSString stringWithFormat:@"\r\n"] dataUsingEncoding:NSUTF8StringEncoding]];
+                blobData = nil;
             }
             i++;
             if(i < count)
             {
-                getFieldData([form objectAtIndex:i]);
+                __block NSDictionary * nextField = [form objectAtIndex:i];
+                getFieldData(nextField);
             }
             else
+            {
                 onComplete(formData);
+                getFieldData = nil;
+            }
 
         };
-        getFieldData([form objectAtIndex:i]);
+        __block NSDictionary * nextField = [form objectAtIndex:i];
+        getFieldData(nextField);
     }
 }
 
-+(NSString *) getHeaderIgnoreCases:(NSString *)field fromHeaders:(NSMutableArray *) headers {
-
++(NSString *) getHeaderIgnoreCases:(NSString *)field fromHeaders:(NSMutableDictionary *) headers {
+    
     NSString * normalCase = [headers valueForKey:field];
     NSString * ignoredCase = [headers valueForKey:[field lowercaseString]];
     if( normalCase != nil)
         return normalCase;
     else
         return ignoredCase;
-
+    
 }
 
 
