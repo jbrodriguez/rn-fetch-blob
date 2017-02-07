@@ -84,7 +84,9 @@
     NSString * encodedUrl = url;
     // send request
     __block NSMutableURLRequest *request = [[NSMutableURLRequest alloc]
-                                    initWithURL:[NSURL URLWithString: encodedUrl]];
+                                    initWithURL:[NSURL URLWithString: encodedUrl]
+									cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+									timeoutInterval:60];
 
     __block NSMutableDictionary *mheaders = [[NSMutableDictionary alloc] initWithDictionary:[RNFetchBlobNetwork normalizeHeaders:headers]];
     // move heavy task to another thread
