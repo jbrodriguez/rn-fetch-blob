@@ -151,6 +151,7 @@
                     {
                         size = [body length];
                         [request setHTTPBody: [body dataUsingEncoding:NSUTF8StringEncoding]];
+						[request setValue:[NSString stringWithFormat:@"%u", [body length]] forHTTPHeaderField:@"Content-Length"];
                     }
                 }
             }
