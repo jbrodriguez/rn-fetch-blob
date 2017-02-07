@@ -6,19 +6,28 @@
 //  Copyright © 2016 wkh237. All rights reserved.
 //
 
-#import "RCTLog.h"
+
 #import <Foundation/Foundation.h>
-#import "RCTBridge.h"
 #import "RNFetchBlob.h"
-#import "RCTEventDispatcher.h"
 #import "RNFetchBlobFS.h"
-#import "RCTRootView.h"
 #import "RNFetchBlobNetwork.h"
 #import "RNFetchBlobConst.h"
 #import "RNFetchBlobReqBuilder.h"
 #import "IOS7Polyfill.h"
 #import <CommonCrypto/CommonDigest.h>
 #import "RNFetchBlobProgress.h"
+
+#if __has_include(<React/RCTAssert.h>)
+#import <React/RCTRootView.h>
+#import <React/RCTLog.h>
+#import <React/RCTEventDispatcher.h>
+#import <React/RCTBridge.h>
+#else
+#import "RCTRootView.h"
+#import "RCTLog.h"
+#import "RCTEventDispatcher.h"
+#import "RCTBridge.h"
+#endif
 
 ////////////////////////////////////////
 //
@@ -31,6 +40,31 @@ NSMapTable * expirationTable;
 NSMapTable * cookiesTable;
 NSMutableDictionary * progressTable;
 NSMutableDictionary * uploadProgressTable;
+
+__attribute__((constructor))
+static void initialize_tables() {
+    if(expirationTable == nil)
+    {
+        expirationTable = [[NSMapTable alloc] init];
+    }
+    if(taskTable == nil)
+    {
+        taskTable = [[NSMapTable alloc] init];
+    }
+    if(progressTable == nil)
+    {
+        progressTable = [[NSMutableDictionary alloc] init];
+    }
+    if(uploadProgressTable == nil)
+    {
+        uploadProgressTable = [[NSMutableDictionary alloc] init];
+    }
+    if(cookiesTable == nil)
+    {
+        cookiesTable = [[NSMapTable alloc] init];
+    }
+}
+
 
 typedef NS_ENUM(NSUInteger, ResponseFormat) {
     UTF8,
@@ -52,6 +86,7 @@ typedef NS_ENUM(NSUInteger, ResponseFormat) {
     NSInteger respStatus;
     NSMutableArray * redirects;
     ResponseFormat responseFormat;
+    BOOL * followRedirect;
 }
 
 @end
@@ -78,26 +113,6 @@ NSOperationQueue *taskQueue;
         taskQueue = [[NSOperationQueue alloc] init];
         taskQueue.maxConcurrentOperationCount = 10;
     }
-    if(expirationTable == nil)
-    {
-        expirationTable = [[NSMapTable alloc] init];
-    }
-    if(taskTable == nil)
-    {
-        taskTable = [[NSMapTable alloc] init];
-    }
-    if(progressTable == nil)
-    {
-        progressTable = [[NSMutableDictionary alloc] init];
-    }
-    if(uploadProgressTable == nil)
-    {
-        uploadProgressTable = [[NSMutableDictionary alloc] init];
-    }
-    if(cookiesTable == nil)
-    {
-        cookiesTable = [[NSMapTable alloc] init];
-    }
     return self;
 }
 
@@ -112,7 +127,7 @@ NSOperationQueue *taskQueue;
         [cookieStr appendString:cookie.name];
         [cookieStr appendString:@"="];
         [cookieStr appendString:cookie.value];
-        
+
         if(cookie.expiresDate == nil) {
             [cookieStr appendString:@"; max-age=0"];
         }
@@ -123,18 +138,18 @@ NSOperationQueue *taskQueue;
             NSString *strDate = [dateFormatter stringFromDate:cookie.expiresDate];
             [cookieStr appendString:strDate];
         }
-        
-        
+
+
         [cookieStr appendString:@"; domain="];
         [cookieStr appendString:hostname];
         [cookieStr appendString:@"; path="];
         [cookieStr appendString:cookie.path];
-        
-        
+
+
         if (cookie.isSecure) {
             [cookieStr appendString:@"; secure"];
         }
-        
+
         if (cookie.isHTTPOnly) {
             [cookieStr appendString:@"; httponly"];
         }
@@ -145,11 +160,19 @@ NSOperationQueue *taskQueue;
 
 + (void) enableProgressReport:(NSString *) taskId config:(RNFetchBlobProgress *)config
 {
+    if(progressTable == nil)
+    {
+        progressTable = [[NSMutableDictionary alloc] init];
+    }
     [progressTable setValue:config forKey:taskId];
 }
 
 + (void) enableUploadProgress:(NSString *) taskId config:(RNFetchBlobProgress *)config
 {
+    if(uploadProgressTable == nil)
+    {
+        uploadProgressTable = [[NSMutableDictionary alloc] init];
+    }
     [uploadProgressTable setValue:config forKey:taskId];
 }
 
@@ -192,6 +215,7 @@ NSOperationQueue *taskQueue;
     self.expectedBytes = 0;
     self.receivedBytes = 0;
     self.options = options;
+    followRedirect = [options valueForKey:@"followRedirect"] == nil ? YES : [[options valueForKey:@"followRedirect"] boolValue];
     isIncrement = [options valueForKey:@"increment"] == nil ? NO : [[options valueForKey:@"increment"] boolValue];
     redirects = [[NSMutableArray alloc] init];
     if(req.URL != nil)
@@ -214,8 +238,15 @@ NSOperationQueue *taskQueue;
     bodyLength = contentLength;
 
     // the session trust any SSL certification
-//    NSURLSessionConfiguration *defaultConfigObject = [NSURLSessionConfiguration defaultSessionConfiguration];
-    NSURLSessionConfiguration *defaultConfigObject = [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:taskId];
+    NSURLSessionConfiguration *defaultConfigObject;
+    if(!followRedirect)
+    {
+        defaultConfigObject = [NSURLSessionConfiguration defaultSessionConfiguration];
+    }
+    else
+    {
+        NSURLSessionConfiguration *defaultConfigObject = [NSURLSessionConfiguration backgroundSessionConfigurationWithIdentifier:taskId];
+    }
 
     // set request timeout
     float timeout = [options valueForKey:@"timeout"] == nil ? -1 : [[options valueForKey:@"timeout"] floatValue];
@@ -270,7 +301,6 @@ NSOperationQueue *taskQueue;
         [app endBackgroundTask:tid];
     }];
 
-
 }
 
 // #115 Invoke fetch.expire event on those expired requests so that the expired event can be handled
@@ -286,7 +316,7 @@ NSOperationQueue *taskQueue;
         [bridge.eventDispatcher sendDeviceEventWithName:EVENT_EXPIRE body:args];
 
     }
-    
+
     // clear expired task entries
     [expirationTable removeAllObjects];
     expirationTable = [[NSMapTable alloc] init];
@@ -392,7 +422,7 @@ NSOperationQueue *taskQueue;
                 [cookiesTable setObject:cookies forKey:response.URL.host];
             }
         }
-        
+
         [self.bridge.eventDispatcher
          sendDeviceEventWithName: EVENT_STATE_CHANGE
          body:respInfo
@@ -415,7 +445,7 @@ NSOperationQueue *taskQueue;
             }
             BOOL overwrite = [options valueForKey:@"overwrite"] == nil ? YES : [[options valueForKey:@"overwrite"] boolValue];
             BOOL appendToExistingFile = [destPath RNFBContainsString:@"?append=true"];
-            
+
             appendToExistingFile = !overwrite;
 
             // For solving #141 append response data if the file already exists
@@ -529,7 +559,7 @@ NSOperationQueue *taskQueue;
         // if it turns out not to be `nil` that means the response data contains valid UTF8 string,
         // in order to properly encode the UTF8 string, use URL encoding before BASE64 encoding.
         NSString * utf8 = [[NSString alloc] initWithData:respData encoding:NSUTF8StringEncoding];
-        
+
         if(responseFormat == BASE64)
         {
             rnfbRespType = RESP_TYPE_BASE64;
@@ -553,7 +583,7 @@ NSOperationQueue *taskQueue;
                 respStr = [respData base64EncodedStringWithOptions:0];
             }
         }
-        }
+    }
 
 
     callback(@[ errMsg, rnfbRespType, respStr]);
@@ -622,9 +652,17 @@ NSOperationQueue *taskQueue;
 
 - (void) URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request completionHandler:(void (^)(NSURLRequest * _Nullable))completionHandler
 {
-    if(request.URL != nil)
-        [redirects addObject:[request.URL absoluteString]];
-    completionHandler(request);
+
+    if(followRedirect)
+    {
+        if(request.URL != nil)
+            [redirects addObject:[request.URL absoluteString]];
+        completionHandler(request);
+    }
+    else
+    {
+        completionHandler(nil);
+    }
 }
 
 @end

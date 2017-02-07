@@ -11,8 +11,13 @@
 #import "RNFetchBlobNetwork.h"
 #import "RNFetchBlobConst.h"
 #import "RNFetchBlobFS.h"
-#import "RCTLog.h"
 #import "IOS7Polyfill.h"
+
+#if __has_include(<React/RCTAssert.h>)
+#import <React/RCTLog.h>
+#else
+#import "RCTLog.h"
+#endif
 
 @interface RNFetchBlobReqBuilder()
 {
@@ -79,9 +84,7 @@
     NSString * encodedUrl = url;
     // send request
     __block NSMutableURLRequest *request = [[NSMutableURLRequest alloc]
-                                    initWithURL:[NSURL URLWithString: encodedUrl]
-									cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
- 									timeoutInterval:60];
+                                    initWithURL:[NSURL URLWithString: encodedUrl]];
 
     __block NSMutableDictionary *mheaders = [[NSMutableDictionary alloc] initWithDictionary:[RNFetchBlobNetwork normalizeHeaders:headers]];
     // move heavy task to another thread
@@ -146,7 +149,6 @@
                     {
                         size = [body length];
                         [request setHTTPBody: [body dataUsingEncoding:NSUTF8StringEncoding]];
-						[request setValue:[NSString stringWithFormat:@"%u", [body length]] forHTTPHeaderField:@"Content-Length"];
                     }
                 }
             }
